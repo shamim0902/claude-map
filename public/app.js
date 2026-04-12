@@ -69,19 +69,19 @@ const State = {
 
 // ─── Tab Definitions ──────────────────────────────────────────
 const TABS_GLOBAL  = ['overview','commands','skills','plans','sessions','settings','mcp','stats','raw'];
-const TABS_PROJECT = ['map','overview','commands','skills','plans','sessions','settings','mcp','stats','raw'];
+const TABS_PROJECT = ['map','overview','skills','commands','sessions','settings','mcp','raw'];
 
 const TAB_META = {
-  map:      { label: 'Map' },
-  sessions: { label: 'Sessions' },
-  overview: { label: 'Overview' },
-  commands: { label: 'Commands' },
-  skills:   { label: 'Skills' },
-  plans:    { label: 'Plans' },
-  settings: { label: 'Settings' },
-  mcp:      { label: 'MCP & Plugins' },
-  stats:    { label: 'Stats' },
-  raw:      { label: 'Raw' },
+  map:      { label: 'Map',     icon: '◈' },
+  overview: { label: 'Overview', icon: '⊞' },
+  sessions: { label: 'Sessions', icon: '◷' },
+  commands: { label: 'Commands', icon: '/' },
+  skills:   { label: 'Skills',   icon: '★' },
+  plans:    { label: 'Plans',    icon: '☰' },
+  settings: { label: 'Settings', icon: '⚙' },
+  mcp:      { label: 'MCP',      icon: '⚡' },
+  stats:    { label: 'Stats',    icon: '▤' },
+  raw:      { label: 'Raw',      icon: '{ }' },
 };
 
 function getCurrentTabs() {
@@ -289,24 +289,41 @@ function renderApp() {
 }
 
 function renderTabBar() {
-  const tabs = getCurrentTabs();
   const scan = State.scan;
   const g    = scan?.global;
+  const proj = scan?.project;
+  const isProject = State.mode === 'project';
+
   const counts = {
-    commands: (State.mode === 'project' ? State.scan?.project?.localCommands?.length : g?.commands?.length) || g?.commands?.length || 0,
-    skills:   (State.mode === 'project' ? State.scan?.project?.localSkills?.length  : g?.skills?.length)   || g?.skills?.length   || 0,
+    commands: isProject ? (proj?.localCommands?.length || 0) + (g?.commands?.length || 0) : g?.commands?.length || 0,
+    skills:   isProject ? (proj?.localSkills?.length || 0) + (g?.skills?.length || 0) : g?.skills?.length || 0,
     plans:    g?.plans?.length || 0,
   };
 
   const tabBar = document.getElementById('tab-bar');
   if (!tabBar) return;
-  tabBar.innerHTML = tabs.map(id => {
+
+  const tabs = getCurrentTabs();
+
+  function renderTab(id) {
     const meta   = TAB_META[id] || { label: id };
     const active = id === State.currentTab;
     const badge  = counts[id] != null && counts[id] > 0
       ? `<span class="tab-badge">${counts[id]}</span>` : '';
-    return `<div class="tab-item ${active ? 'active' : ''}" onclick="navigate('${id}')">${meta.label}${badge}</div>`;
-  }).join('');
+    return `<div class="tab-item ${active ? 'active' : ''}" onclick="navigate('${id}')">
+      <span class="tab-icon">${meta.icon || ''}</span>${meta.label}${badge}
+    </div>`;
+  }
+
+  const label = isProject
+    ? projectName(State.projectPath)
+    : 'Global';
+
+  tabBar.innerHTML = `
+    <div class="tab-group">
+      <span class="tab-group-label" title="${isProject ? escapeAttr(State.projectPath) : '~/.claude/'}">${escapeHtml(label)}</span>
+      ${tabs.map(renderTab).join('')}
+    </div>`;
 }
 
 function renderTabContent() {
@@ -1934,16 +1951,23 @@ function renderSessionsList() {
             const duration = s.startedAt && s.endedAt
               ? formatDuration(new Date(s.endedAt) - new Date(s.startedAt))
               : '';
-            return `<div class="session-card" onclick="openSessionDetail('${escapeAttr(s.id)}')">
-              <div class="session-card-title">${escapeHtml(s.title)}</div>
-              <div class="session-card-meta">
-                ${s.gitBranch ? `<span class="session-badge branch">${escapeHtml(s.gitBranch)}</span>` : ''}
-                ${s.modelsUsed?.length ? s.modelsUsed.map(m => `<span class="session-badge model">${escapeHtml(m.split('-').slice(-2).join('-'))}</span>`).join('') : ''}
-                <span>${s.messageCount} msgs</span>
-                <span>${s.toolCallCount} tools</span>
-                ${duration ? `<span>${duration}</span>` : ''}
-                <span>${formatBytes(s.fileSize)}</span>
-                ${s.startedAt ? `<span>${timeSince(s.startedAt)}</span>` : ''}
+            const resumeCmd = `claude --resume ${s.id}`;
+            return `<div class="session-card">
+              <div class="session-card-top" onclick="openSessionDetail('${escapeAttr(s.id)}')">
+                <div class="session-card-title">${escapeHtml(s.title)}</div>
+                <div class="session-card-meta">
+                  ${s.gitBranch ? `<span class="session-badge branch">${escapeHtml(s.gitBranch)}</span>` : ''}
+                  ${s.modelsUsed?.length ? s.modelsUsed.map(m => `<span class="session-badge model">${escapeHtml(m.split('-').slice(-2).join('-'))}</span>`).join('') : ''}
+                  <span>${s.messageCount} msgs</span>
+                  <span>${s.toolCallCount} tools</span>
+                  ${duration ? `<span>${duration}</span>` : ''}
+                  <span>${formatBytes(s.fileSize)}</span>
+                  ${s.startedAt ? `<span>${timeSince(s.startedAt)}</span>` : ''}
+                </div>
+              </div>
+              <div class="session-card-actions">
+                <code class="session-resume-cmd">${escapeHtml(resumeCmd)}</code>
+                <button class="btn-icon session-copy-btn" onclick="copyResumeCmd('${escapeAttr(s.id)}', this)" title="Copy resume command">Copy</button>
               </div>
             </div>`;
           }).join('')
@@ -1958,6 +1982,15 @@ function formatDuration(ms) {
   const h = Math.floor(ms / 3600000);
   const m = Math.round((ms % 3600000) / 60000);
   return `${h}h ${m}m`;
+}
+
+function copyResumeCmd(sessionId, btn) {
+  const cmd = `claude --resume ${sessionId}`;
+  navigator.clipboard?.writeText(cmd).then(() => {
+    btn.textContent = '✓ Copied';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+  });
 }
 
 async function loadSessionsList() {
