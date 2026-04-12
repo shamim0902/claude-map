@@ -8,6 +8,7 @@
   <link rel="stylesheet" href="/style.css">
   <link id="hljs-dark"  rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
   <link id="hljs-light" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css" disabled>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -109,8 +110,12 @@
         <div id="import-drop-zone" class="import-drop-zone"
              ondragover="event.preventDefault();this.classList.add('dragover')"
              ondragleave="this.classList.remove('dragover')"
-             ondrop="handleImportDrop(event)">
-          Drop .md or .json file here
+             ondrop="handleImportDrop(event)"
+             onclick="document.getElementById('import-file-input').click()">
+          <span class="import-drop-label">Drop or click to upload</span>
+          <span class="import-drop-sub">.md · .json · .zip</span>
+          <input type="file" id="import-file-input" accept=".md,.json,.zip"
+                 style="display:none" onchange="handleImportFileSelect(event)">
         </div>
         <textarea id="import-textarea" class="import-textarea"
                   placeholder="Or paste skill/command markdown or bundle JSON here…"
