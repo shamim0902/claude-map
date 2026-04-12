@@ -50,6 +50,9 @@ const State = {
   activeSessionId: null,
   historyEntries: null,
   historyMode: false,
+  costReport: null,
+  costReportLoading: false,
+  costReportMode: false,
 
   // Stats
   statsToolData: null,
@@ -66,6 +69,37 @@ const State = {
   refreshTimer: null,
   statsSort: 'date-desc',
 };
+
+// ─── Model Pricing (per million tokens, USD) ──────────────────
+const MODEL_PRICING = [
+  { match: 'opus-4',     input: 15,   output: 75,   cacheWrite: 3.75, cacheRead: 1.50 },
+  { match: 'sonnet-4',   input: 3,    output: 15,   cacheWrite: 3.75, cacheRead: 0.30 },
+  { match: 'haiku-4',    input: 0.80, output: 4,    cacheWrite: 1.00, cacheRead: 0.08 },
+  { match: 'sonnet-3-5', input: 3,    output: 15,   cacheWrite: 3.75, cacheRead: 0.30 },
+  { match: 'opus-3',     input: 15,   output: 75,   cacheWrite: 3.75, cacheRead: 1.50 },
+  { match: 'haiku-3',    input: 0.25, output: 1.25, cacheWrite: 0.30, cacheRead: 0.03 },
+];
+const MODEL_PRICING_DEFAULT = { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.30 };
+
+function getPricing(model) {
+  const m = (model || '').toLowerCase();
+  return MODEL_PRICING.find(r => m.includes(r.match)) || MODEL_PRICING_DEFAULT;
+}
+
+function calculateCost(t, model) {
+  if (!t) return 0;
+  const p = getPricing(model);
+  return ((t.input || 0) * p.input + (t.output || 0) * p.output +
+          (t.cacheWrite || 0) * p.cacheWrite + (t.cacheRead || 0) * p.cacheRead) / 1_000_000;
+}
+
+function formatCost(n) {
+  if (!n || n <= 0) return '$0.00';
+  if (n < 0.001) return '<$0.001';
+  if (n < 0.01)  return '$' + n.toFixed(4);
+  if (n < 1)     return '$' + n.toFixed(3);
+  return '$' + n.toFixed(2);
+}
 
 // ─── Tab Definitions ──────────────────────────────────────────
 const TABS_GLOBAL  = ['overview','commands','skills','plans','sessions','settings','mcp','stats','raw'];
@@ -125,6 +159,10 @@ const API = {
   toolStats(projectPath, days = 30) {
     const qs = projectPath ? `?project=${encodeURIComponent(projectPath)}&days=${days}` : `?days=${days}`;
     return this.get(`/api/stats/tools${qs}`);
+  },
+  costStats(projectPath) {
+    const qs = projectPath ? `?project=${encodeURIComponent(projectPath)}` : '';
+    return this.get(`/api/stats/costs${qs}`);
   }
 };
 
@@ -2057,6 +2095,7 @@ function renderSessions() {
     return renderSessionDetail();
   }
   if (State.historyMode) return renderCommandHistory();
+  if (State.costReportMode) return renderCostReport();
   return renderSessionsList();
 }
 
@@ -2081,8 +2120,9 @@ function renderSessionsList() {
       <h2>Sessions <span class="badge">${sessions.length}</span></h2>
       <div style="display:flex;gap:8px;align-items:center">
         <div class="session-toggle">
-          <button class="session-toggle-btn active" onclick="State.historyMode=false;renderTabContent()">Sessions</button>
-          <button class="session-toggle-btn" onclick="State.historyMode=true;State.historyEntries=null;renderTabContent()">Command History</button>
+          <button class="session-toggle-btn active" onclick="State.historyMode=false;State.costReportMode=false;renderTabContent()">Sessions</button>
+          <button class="session-toggle-btn" onclick="State.historyMode=true;State.costReportMode=false;State.historyEntries=null;renderTabContent()">Command History</button>
+          <button class="session-toggle-btn" onclick="State.historyMode=false;State.costReportMode=true;State.costReport=null;renderTabContent()">Cost Report</button>
         </div>
         <input class="search-input" placeholder="Filter sessions…"
                value="${escapeAttr(State.sessionsFilter)}"
@@ -2103,6 +2143,7 @@ function renderSessionsList() {
                 <div class="session-card-meta">
                   ${s.gitBranch ? `<span class="session-badge branch">${escapeHtml(s.gitBranch)}</span>` : ''}
                   ${s.modelsUsed?.length ? s.modelsUsed.map(m => `<span class="session-badge model">${escapeHtml(m.split('-').slice(-2).join('-'))}</span>`).join('') : ''}
+                  ${s.tokenUsage && (s.tokenUsage.input + s.tokenUsage.output) > 0 ? `<span class="session-badge cost">${escapeHtml(formatCost(calculateCost(s.tokenUsage, s.modelsUsed?.[0])))}</span>` : ''}
                   <span>${s.messageCount} msgs</span>
                   <span>${s.toolCallCount} tools</span>
                   ${duration ? `<span>${duration}</span>` : ''}
@@ -2189,6 +2230,40 @@ function renderSessionDetail() {
   const toolEntries = Object.entries(summary.toolBreakdown || {}).sort((a, b) => b[1] - a[1]);
   const maxTool = toolEntries.length ? toolEntries[0][1] : 1;
 
+  // Cost calculation per model
+  const tt = summary.totalTokens || {};
+  const primaryModel = summary.modelsUsed?.[0] || '';
+  const totalCost = calculateCost(tt, primaryModel);
+  const inputCost  = (tt.input || 0) * getPricing(primaryModel).input / 1_000_000;
+  const outputCost = (tt.output || 0) * getPricing(primaryModel).output / 1_000_000;
+  // Cache savings = what cache_read tokens would cost at full input price minus what was paid
+  const p = getPricing(primaryModel);
+  const cacheSavings = (tt.cacheRead || 0) * (p.input - p.cacheRead) / 1_000_000;
+
+  // Per-model cost rows (aggregate turn-level token data by model)
+  const tokensByModel = {};
+  for (const turn of turns) {
+    if (!turn.assistant) continue;
+    const m = turn.assistant.model || 'unknown';
+    if (!tokensByModel[m]) tokensByModel[m] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+    const tu = turn.assistant.tokenUsage || {};
+    tokensByModel[m].input      += tu.input || 0;
+    tokensByModel[m].output     += tu.output || 0;
+    tokensByModel[m].cacheRead  += tu.cacheRead || 0;
+    tokensByModel[m].cacheWrite += tu.cacheWrite || 0;
+  }
+  const modelCostRows = Object.entries(tokensByModel).map(([m, tk]) => {
+    const cost = calculateCost(tk, m);
+    return `<tr>
+      <td style="font-family:monospace;font-size:12px">${escapeHtml(m.split('-').slice(-3).join('-'))}</td>
+      <td>${formatTokens(tk.input)}</td>
+      <td>${formatTokens(tk.output)}</td>
+      <td>${formatTokens(tk.cacheWrite)}</td>
+      <td>${formatTokens(tk.cacheRead)}</td>
+      <td style="font-weight:600;color:var(--accent-teal)">${formatCost(cost)}</td>
+    </tr>`;
+  }).join('');
+
   return `<div>
     <button class="btn-secondary" onclick="State.sessionViewMode='list';renderTabContent()" style="margin-bottom:12px">← Back to Sessions</button>
 
@@ -2207,15 +2282,33 @@ function renderSessionDetail() {
         <div class="session-summary-label">Conversation Turns</div>
         <div class="session-summary-value">${summary.totalTurns}</div>
       </div>
+      <div class="session-summary-card accent">
+        <div class="session-summary-label">Estimated Cost</div>
+        <div class="session-summary-value">${escapeHtml(formatCost(totalCost))}</div>
+      </div>
+      <div class="session-summary-card">
+        <div class="session-summary-label">Input Tokens</div>
+        <div class="session-summary-value">${formatTokens(tt.input || 0)}</div>
+      </div>
       <div class="session-summary-card">
         <div class="session-summary-label">Output Tokens</div>
-        <div class="session-summary-value">${formatTokens(summary.totalTokens?.output || 0)}</div>
+        <div class="session-summary-value">${formatTokens(tt.output || 0)}</div>
       </div>
       <div class="session-summary-card">
-        <div class="session-summary-label">Cache Read</div>
-        <div class="session-summary-value">${formatTokens(summary.totalTokens?.cacheRead || 0)}</div>
+        <div class="session-summary-label">Cache Savings</div>
+        <div class="session-summary-value" style="color:var(--status-full)">${escapeHtml(formatCost(cacheSavings))}</div>
       </div>
     </div>
+
+    ${modelCostRows ? `<div class="section">
+      <div class="section-title">Cost Breakdown by Model</div>
+      <div style="overflow-x:auto">
+        <table class="cost-breakdown-table">
+          <thead><tr><th>Model</th><th>Input</th><th>Output</th><th>Cache Write</th><th>Cache Read</th><th>Cost</th></tr></thead>
+          <tbody>${modelCostRows}</tbody>
+        </table>
+      </div>
+    </div>` : ''}
 
     ${toolEntries.length ? `<div class="section">
       <div class="section-title">Tool Usage</div>
@@ -2276,8 +2369,9 @@ function renderCommandHistory() {
     <div class="tab-header">
       <h2>Command History <span class="badge">${entries.length}</span></h2>
       <div class="session-toggle">
-        <button class="session-toggle-btn" onclick="State.historyMode=false;renderTabContent()">Sessions</button>
+        <button class="session-toggle-btn" onclick="State.historyMode=false;State.costReportMode=false;renderTabContent()">Sessions</button>
         <button class="session-toggle-btn active">Command History</button>
+        <button class="session-toggle-btn" onclick="State.historyMode=false;State.costReportMode=true;State.costReport=null;renderTabContent()">Cost Report</button>
       </div>
     </div>
     ${Object.entries(days).map(([day, items]) => `
@@ -2290,6 +2384,240 @@ function renderCommandHistory() {
     `).join('')}
     ${!entries.length ? '<div class="empty-state" style="min-height:120px"><p>No command history found</p></div>' : ''}
   </div>`;
+}
+
+function renderCostReport() {
+  const projectPath = State.mode === 'project' ? State.projectPath : '';
+
+  if (!State.costReport && !State.costReportLoading) {
+    loadCostReport();
+    return `<div class="loading-state"><div class="spinner"></div><p>Loading cost data…</p></div>`;
+  }
+  if (State.costReportLoading && !State.costReport) {
+    return `<div class="loading-state"><div class="spinner"></div><p>Loading cost data…</p></div>`;
+  }
+
+  const data = State.costReport || {};
+  const totalByModel = data.totalByModel || {};
+  const dailyCosts   = data.dailyCosts || [];
+
+  // Compute total cost per model and grand total
+  const modelCosts = Object.entries(totalByModel).map(([model, tk]) => ({
+    model,
+    tokens: tk,
+    cost: calculateCost(tk, model),
+  })).sort((a, b) => b.cost - a.cost);
+
+  const grandTotal   = modelCosts.reduce((s, r) => s + r.cost, 0);
+  const totalInput   = modelCosts.reduce((s, r) => s + (r.tokens.input || 0) * getPricing(r.model).input / 1_000_000, 0);
+  const totalOutput  = modelCosts.reduce((s, r) => s + (r.tokens.output || 0) * getPricing(r.model).output / 1_000_000, 0);
+  const totalCacheR  = modelCosts.reduce((s, r) => s + (r.tokens.cacheRead || 0), 0);
+  const totalCacheW  = modelCosts.reduce((s, r) => s + (r.tokens.cacheWrite || 0), 0);
+  // Cache savings: what cacheRead tokens would cost at full input price vs cacheRead price
+  const cacheSavings = modelCosts.reduce((s, r) => {
+    const p = getPricing(r.model);
+    return s + (r.tokens.cacheRead || 0) * (p.input - p.cacheRead) / 1_000_000;
+  }, 0);
+
+  const maxModelCost = modelCosts.length ? modelCosts[0].cost : 1;
+
+  // Top 10 sessions by cost (requires sessions list to be loaded)
+  const sessions = State.sessionsList?.sessions || [];
+  const topSessions = sessions
+    .filter(s => s.tokenUsage && (s.tokenUsage.input + s.tokenUsage.output) > 0)
+    .map(s => ({ ...s, cost: calculateCost(s.tokenUsage, s.modelsUsed?.[0]) }))
+    .sort((a, b) => b.cost - a.cost)
+    .slice(0, 10);
+
+  // Daily cost totals for chart
+  const dailyTotals = dailyCosts.map(d => {
+    const total = Object.entries(d.tokensByModel).reduce((s, [m, tk]) => s + calculateCost(tk, m), 0);
+    return { date: d.date, total };
+  });
+
+  return `<div>
+    <div class="tab-header">
+      <h2>Cost Report <span class="badge">${escapeHtml(formatCost(grandTotal))}</span></h2>
+      <div class="session-toggle">
+        <button class="session-toggle-btn" onclick="State.historyMode=false;State.costReportMode=false;renderTabContent()">Sessions</button>
+        <button class="session-toggle-btn" onclick="State.historyMode=true;State.costReportMode=false;State.historyEntries=null;renderTabContent()">Command History</button>
+        <button class="session-toggle-btn active">Cost Report</button>
+      </div>
+    </div>
+    ${!projectPath ? '<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Select a project to see project-specific costs. Showing all projects.</p>' : ''}
+
+    <div class="session-summary" style="grid-template-columns:repeat(4,1fr)">
+      <div class="session-summary-card accent">
+        <div class="session-summary-label">Total Cost</div>
+        <div class="session-summary-value">${escapeHtml(formatCost(grandTotal))}</div>
+      </div>
+      <div class="session-summary-card">
+        <div class="session-summary-label">Input Cost</div>
+        <div class="session-summary-value">${escapeHtml(formatCost(totalInput))}</div>
+      </div>
+      <div class="session-summary-card">
+        <div class="session-summary-label">Output Cost</div>
+        <div class="session-summary-value">${escapeHtml(formatCost(totalOutput))}</div>
+      </div>
+      <div class="session-summary-card">
+        <div class="session-summary-label">Cache Savings</div>
+        <div class="session-summary-value" style="color:var(--status-full)">${escapeHtml(formatCost(cacheSavings))}</div>
+      </div>
+    </div>
+
+    ${dailyTotals.length > 1 ? `<div class="section">
+      <div class="section-title">Daily Cost</div>
+      <canvas id="cost-chart" style="width:100%;height:220px;display:block"></canvas>
+    </div>` : ''}
+
+    ${modelCosts.length ? `<div class="section">
+      <div class="section-title">Cost by Model</div>
+      <div class="tool-breakdown-list">
+        ${modelCosts.map(r => `<div class="tool-breakdown-row">
+          <span class="tool-breakdown-name" style="font-family:monospace">${escapeHtml(r.model.split('-').slice(-3).join('-'))}</span>
+          <div class="tool-breakdown-bar-bg"><div class="tool-breakdown-bar" style="width:${(r.cost / maxModelCost * 100).toFixed(0)}%"></div></div>
+          <span class="tool-breakdown-count">${escapeHtml(formatCost(r.cost))}</span>
+        </div>`).join('')}
+      </div>
+      <div style="overflow-x:auto;margin-top:12px">
+        <table class="cost-breakdown-table">
+          <thead><tr><th>Model</th><th>Input Tok</th><th>Output Tok</th><th>Cache Write</th><th>Cache Read</th><th>Cost</th></tr></thead>
+          <tbody>${modelCosts.map(r => `<tr>
+            <td style="font-family:monospace;font-size:12px">${escapeHtml(r.model.split('-').slice(-3).join('-'))}</td>
+            <td>${formatTokens(r.tokens.input)}</td>
+            <td>${formatTokens(r.tokens.output)}</td>
+            <td>${formatTokens(r.tokens.cacheWrite)}</td>
+            <td>${formatTokens(r.tokens.cacheRead)}</td>
+            <td style="font-weight:600;color:var(--accent-teal)">${escapeHtml(formatCost(r.cost))}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>` : '<div class="empty-state" style="min-height:120px"><p>No cost data available</p></div>'}
+
+    ${topSessions.length ? `<div class="section">
+      <div class="section-title">Top Sessions by Cost</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${topSessions.map(s => `<div class="session-card" style="cursor:pointer" onclick="openSessionDetail('${escapeAttr(s.id)}')">
+          <div class="session-card-top">
+            <div class="session-card-title">${escapeHtml(s.title)}</div>
+            <div class="session-card-meta">
+              ${s.gitBranch ? `<span class="session-badge branch">${escapeHtml(s.gitBranch)}</span>` : ''}
+              ${s.modelsUsed?.length ? `<span class="session-badge model">${escapeHtml(s.modelsUsed[0].split('-').slice(-2).join('-'))}</span>` : ''}
+              <span class="session-badge cost">${escapeHtml(formatCost(s.cost))}</span>
+              <span>${formatTokens((s.tokenUsage.input || 0) + (s.tokenUsage.output || 0))} tokens</span>
+              ${s.startedAt ? `<span>${timeSince(s.startedAt)}</span>` : ''}
+            </div>
+          </div>
+        </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <p style="font-size:11px;color:var(--text-muted);margin-top:16px">
+      Costs are estimates based on public Anthropic pricing. Scanned ${data.sessionsScanned || 0} sessions.
+      Prices subject to change — verify at <a href="https://www.anthropic.com/pricing" target="_blank" style="color:var(--text-muted)">anthropic.com/pricing</a>.
+    </p>
+  </div>`;
+}
+
+async function loadCostReport() {
+  const projectPath = State.mode === 'project' ? State.projectPath : '';
+  State.costReportLoading = true;
+  try {
+    State.costReport = await API.costStats(projectPath);
+    // Also load sessions list if not already loaded (needed for top-sessions table)
+    if (!State.sessionsList && projectPath) loadSessionsList();
+  } catch { State.costReport = { dailyCosts: [], totalByModel: {}, sessionsScanned: 0 }; }
+  State.costReportLoading = false;
+  renderTabContent();
+  // Init chart after render
+  setTimeout(() => initCostChart(), 50);
+}
+
+function initCostChart() {
+  const canvas = document.getElementById('cost-chart');
+  if (!canvas || !State.costReport) return;
+  const dailyCosts = State.costReport.dailyCosts || [];
+  const daily = dailyCosts.map(d => ({
+    date: d.date,
+    total: Object.entries(d.tokensByModel).reduce((s, [m, tk]) => s + calculateCost(tk, m), 0),
+  }));
+  if (daily.length < 2) return;
+  drawCostChart(canvas, daily);
+  const ro = new ResizeObserver(() => drawCostChart(canvas, daily));
+  ro.observe(canvas.parentElement);
+}
+
+function drawCostChart(canvas, daily) {
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.parentElement.clientWidth;
+  const H = 220;
+  canvas.width  = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width  = W + 'px';
+  canvas.style.height = H + 'px';
+
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, W, H);
+
+  const PAD = { top: 20, right: 20, bottom: 36, left: 64 };
+  const cW = W - PAD.left - PAD.right;
+  const cH = H - PAD.top  - PAD.bottom;
+  const n  = daily.length;
+
+  const vals = daily.map(d => d.total);
+  const maxY = Math.max(...vals, 0.001);
+
+  const toX = i => PAD.left + (i / Math.max(n - 1, 1)) * cW;
+  const toY = v => PAD.top  + cH - (v / maxY) * cH;
+
+  const isDark = document.documentElement.getAttribute('data-theme') !== 'light';
+  const gridColor  = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)';
+  const labelColor = isDark ? 'rgba(255,255,255,0.45)' : 'rgba(0,0,0,0.45)';
+  const lineColor  = '#00d4aa';
+
+  // Grid lines
+  ctx.font = '11px system-ui,sans-serif';
+  ctx.fillStyle = labelColor;
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = PAD.top + (cH / 4) * i;
+    const v = maxY * (1 - i / 4);
+    ctx.strokeStyle = gridColor;
+    ctx.lineWidth   = 1;
+    ctx.beginPath(); ctx.moveTo(PAD.left, y); ctx.lineTo(PAD.left + cW, y); ctx.stroke();
+    ctx.fillText('$' + (v < 0.01 ? v.toFixed(4) : v < 1 ? v.toFixed(3) : v.toFixed(2)), PAD.left - 6, y + 4);
+  }
+
+  // Filled area
+  ctx.beginPath();
+  ctx.moveTo(toX(0), toY(vals[0]));
+  for (let i = 1; i < n; i++) ctx.lineTo(toX(i), toY(vals[i]));
+  ctx.lineTo(toX(n - 1), PAD.top + cH);
+  ctx.lineTo(toX(0), PAD.top + cH);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, PAD.top, 0, PAD.top + cH);
+  grad.addColorStop(0, 'rgba(0,212,170,0.25)');
+  grad.addColorStop(1, 'rgba(0,212,170,0)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Line
+  ctx.beginPath();
+  ctx.moveTo(toX(0), toY(vals[0]));
+  for (let i = 1; i < n; i++) ctx.lineTo(toX(i), toY(vals[i]));
+  ctx.strokeStyle = lineColor;
+  ctx.lineWidth   = 2;
+  ctx.lineJoin    = 'round';
+  ctx.stroke();
+
+  // X-axis labels
+  ctx.fillStyle  = labelColor;
+  ctx.textAlign  = 'center';
+  const step = Math.max(1, Math.floor(n / 7));
+  for (let i = 0; i < n; i += step) {
+    ctx.fillText(daily[i].date.slice(5), toX(i), H - PAD.bottom + 16);
+  }
 }
 
 async function loadCommandHistory() {

@@ -640,12 +640,19 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .session-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--bg-surface); border: 1px solid var(--bg-border); color: var(--text-secondary); }
 .session-badge.branch { color: var(--accent-blue); border-color: rgba(79,163,224,0.3); }
 .session-badge.model  { color: #b07cda; border-color: rgba(155,89,182,0.3); }
+.session-badge.cost   { color: var(--status-full); border-color: rgba(0,212,170,0.3); font-weight: 600; }
 
 /* ── Session Detail / Timeline ──────────────────────────── */
 .session-detail-header { background: var(--bg-elevated); border: 1px solid var(--bg-border); border-radius: var(--radius-md); padding: 14px; margin-bottom: 14px; }
 .session-detail-meta { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: var(--text-secondary); margin-top: 6px; }
 .session-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-bottom: 14px; }
 .session-summary-card { background: var(--bg-elevated); border: 1px solid var(--bg-border); border-radius: var(--radius-sm); padding: 10px 12px; }
+.session-summary-card.accent { border-color: rgba(0,212,170,0.3); }
+.session-summary-card.accent .session-summary-value { color: var(--accent-teal); }
+.cost-breakdown-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.cost-breakdown-table th { text-align: left; padding: 4px 8px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); border-bottom: 1px solid var(--bg-border); }
+.cost-breakdown-table td { padding: 6px 8px; border-bottom: 1px solid var(--bg-border); color: var(--text-secondary); }
+.cost-breakdown-table tr:last-child td { border-bottom: none; }
 .session-summary-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--text-muted); margin-bottom: 4px; }
 .session-summary-value { font-size: 18px; font-weight: 600; color: var(--text-primary); }
 .tool-breakdown-list { margin-top: 8px; }

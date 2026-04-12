@@ -811,6 +811,7 @@ function readSessionHead(filePath) {
     let sessionId = null, title = null, gitBranch = null, version = null;
     let startedAt = null, endedAt = null, model = null;
     let msgCount = 0, toolCount = 0;
+    let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0;
     const modelsUsed = new Set();
 
     for (const line of lines) {
@@ -842,6 +843,11 @@ function readSessionHead(filePath) {
           if (Array.isArray(content)) {
             toolCount += content.filter(b => b.type === 'tool_use').length;
           }
+          const usage = d.message?.usage || {};
+          totalInput      += usage.input_tokens || 0;
+          totalOutput     += usage.output_tokens || 0;
+          totalCacheRead  += usage.cache_read_input_tokens || 0;
+          totalCacheWrite += usage.cache_write_input_tokens || 0;
         }
       } catch { /* skip malformed line */ }
     }
@@ -857,6 +863,7 @@ function readSessionHead(filePath) {
       toolCallCount: toolCount,
       modelsUsed: Array.from(modelsUsed),
       fileSize: stat.size,
+      tokenUsage: { input: totalInput, output: totalOutput, cacheRead: totalCacheRead, cacheWrite: totalCacheWrite },
     };
   } catch { return null; }
 }
@@ -933,7 +940,7 @@ app.get('/api/sessions/:id', (req, res) => {
     const turns = [];
     const toolBreakdown = {};
     const modelsUsed = new Set();
-    let totalInput = 0, totalOutput = 0, totalCacheRead = 0;
+    let totalInput = 0, totalOutput = 0, totalCacheRead = 0, totalCacheWrite = 0;
     let currentTurn = null;
 
     for (const line of lines) {
@@ -984,26 +991,29 @@ app.get('/api/sessions/:id', (req, res) => {
           }
 
           const usage = msg.usage || {};
-          const input  = usage.input_tokens || 0;
-          const output = usage.output_tokens || 0;
-          const cacheR = usage.cache_read_input_tokens || 0;
-          totalInput  += input;
-          totalOutput += output;
-          totalCacheRead += cacheR;
+          const input      = usage.input_tokens || 0;
+          const output     = usage.output_tokens || 0;
+          const cacheR     = usage.cache_read_input_tokens || 0;
+          const cacheW     = usage.cache_write_input_tokens || 0;
+          totalInput      += input;
+          totalOutput     += output;
+          totalCacheRead  += cacheR;
+          totalCacheWrite += cacheW;
 
           // Merge with existing assistant data if multiple assistant chunks
           if (currentTurn.assistant) {
             if (textParts.length) currentTurn.assistant.text += '\n' + textParts.join('\n');
             currentTurn.assistant.toolCalls.push(...toolCalls);
-            currentTurn.assistant.tokenUsage.input  += input;
-            currentTurn.assistant.tokenUsage.output += output;
-            currentTurn.assistant.tokenUsage.cacheRead += cacheR;
+            currentTurn.assistant.tokenUsage.input      += input;
+            currentTurn.assistant.tokenUsage.output     += output;
+            currentTurn.assistant.tokenUsage.cacheRead  += cacheR;
+            currentTurn.assistant.tokenUsage.cacheWrite += cacheW;
           } else {
             currentTurn.assistant = {
               model,
               text: textParts.join('\n').slice(0, 2000),
               toolCalls,
-              tokenUsage: { input, output, cacheRead: cacheR }
+              tokenUsage: { input, output, cacheRead: cacheR, cacheWrite: cacheW }
             };
           }
         }
@@ -1017,7 +1027,7 @@ app.get('/api/sessions/:id', (req, res) => {
         totalTurns: turns.length,
         toolBreakdown,
         modelsUsed: Array.from(modelsUsed),
-        totalTokens: { input: totalInput, output: totalOutput, cacheRead: totalCacheRead }
+        totalTokens: { input: totalInput, output: totalOutput, cacheRead: totalCacheRead, cacheWrite: totalCacheWrite }
       }
     });
   } catch (err) {
@@ -1134,6 +1144,100 @@ app.get('/api/stats/tools', (req, res) => {
   }
 
   res.json({ toolUsage, sessionsScanned, period: `${days}d` });
+});
+
+// ─── Cost Stats ──────────────────────────────────────────────────────────────
+
+app.get('/api/stats/costs', (req, res) => {
+  const projectPath = req.query.project;
+  const projectsDir = path.join(CLAUDE_DIR, 'projects');
+  if (!fs.existsSync(projectsDir)) return res.json({ dailyCosts: [], totalByModel: {}, sessionsScanned: 0 });
+
+  // Collect JSONL files (same pattern as /api/sessions)
+  const filesToScan = [];
+  try {
+    const encodedDirs = projectPath
+      ? [encodeProjectPath(path.resolve(projectPath))]
+      : fs.readdirSync(projectsDir).filter(d => {
+          try { return fs.statSync(path.join(projectsDir, d)).isDirectory(); } catch { return false; }
+        });
+
+    for (const encoded of encodedDirs) {
+      const dir = path.join(projectsDir, encoded);
+      if (!fs.existsSync(dir)) continue;
+      try {
+        for (const entry of fs.readdirSync(dir)) {
+          const entryPath = path.join(dir, entry);
+          try {
+            const stat = fs.statSync(entryPath);
+            if (stat.isFile() && entry.endsWith('.jsonl')) {
+              filesToScan.push({ path: entryPath, mtime: stat.mtimeMs });
+            } else if (stat.isDirectory() && !entry.includes('subagent')) {
+              for (const sub of fs.readdirSync(entryPath)) {
+                if (sub.endsWith('.jsonl') && !sub.includes('agent')) {
+                  const subPath = path.join(entryPath, sub);
+                  try { filesToScan.push({ path: subPath, mtime: fs.statSync(subPath).mtimeMs }); } catch { /* skip */ }
+                }
+              }
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* skip */ }
+
+  // Sort most recent first, cap at 200 for performance
+  filesToScan.sort((a, b) => b.mtime - a.mtime);
+  const toScan = filesToScan.slice(0, 200);
+
+  const dailyCostsMap = {};  // { 'YYYY-MM-DD': { [model]: { input, output, cacheRead, cacheWrite } } }
+  const totalByModel  = {};  // { [model]: { input, output, cacheRead, cacheWrite } }
+  let sessionsScanned = 0;
+
+  for (const file of toScan) {
+    try {
+      const content = fs.readFileSync(file.path, 'utf8');
+      sessionsScanned++;
+      for (const line of content.split('\n')) {
+        if (!line.trim() || !line.includes('"assistant"')) continue;
+        try {
+          const d = JSON.parse(line);
+          if (d.type !== 'assistant') continue;
+          const usage = d.message?.usage;
+          if (!usage) continue;
+          const model = d.message?.model || 'unknown';
+          const date  = d.timestamp ? d.timestamp.slice(0, 10) : 'unknown';
+
+          const input      = usage.input_tokens || 0;
+          const output     = usage.output_tokens || 0;
+          const cacheRead  = usage.cache_read_input_tokens || 0;
+          const cacheWrite = usage.cache_write_input_tokens || 0;
+          if (input + output + cacheRead + cacheWrite === 0) continue;
+
+          // Daily accumulation
+          if (!dailyCostsMap[date]) dailyCostsMap[date] = {};
+          if (!dailyCostsMap[date][model]) dailyCostsMap[date][model] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+          dailyCostsMap[date][model].input      += input;
+          dailyCostsMap[date][model].output     += output;
+          dailyCostsMap[date][model].cacheRead  += cacheRead;
+          dailyCostsMap[date][model].cacheWrite += cacheWrite;
+
+          // Total accumulation
+          if (!totalByModel[model]) totalByModel[model] = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+          totalByModel[model].input      += input;
+          totalByModel[model].output     += output;
+          totalByModel[model].cacheRead  += cacheRead;
+          totalByModel[model].cacheWrite += cacheWrite;
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
+  }
+
+  const dailyCosts = Object.entries(dailyCostsMap)
+    .map(([date, tokensByModel]) => ({ date, tokensByModel }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  res.json({ dailyCosts, totalByModel, sessionsScanned });
 });
 
 // ─── Skill Export/Import ─────────────────────────────────────────────────────
