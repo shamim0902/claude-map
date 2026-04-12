@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════
-//  Claude Map — Frontend Application  v2.0
+//  Claude Map — Frontend Application  v3.0
 // ═══════════════════════════════════════════════════════════════
 
 // ─── State ────────────────────────────────────────────────────
@@ -36,6 +36,31 @@ const State = {
   rawFileLoading: false,
   fileTreeExpanded: new Set(),
 
+  // Skills
+  skillScope: 'all',              // 'all' | 'global' | 'project'
+
+  // Sessions
+  sessionsList: null,
+  sessionsLoading: false,
+  sessionsOffset: 0,
+  sessionsFilter: '',
+  sessionDetail: null,
+  sessionDetailLoading: false,
+  sessionViewMode: 'list',
+  activeSessionId: null,
+  historyEntries: null,
+  historyMode: false,
+
+  // Stats
+  statsToolData: null,
+  statsToolLoading: false,
+  statsChartSeries: 'messages',
+
+  // Import/Export
+  importModalOpen: false,
+  importScope: 'project',
+  importPreview: null,
+
   // Misc
   sseConnected: false,
   refreshTimer: null,
@@ -43,11 +68,12 @@ const State = {
 };
 
 // ─── Tab Definitions ──────────────────────────────────────────
-const TABS_GLOBAL  = ['overview','commands','skills','plans','settings','mcp','stats','raw'];
-const TABS_PROJECT = ['map','overview','commands','skills','plans','settings','mcp','stats','raw'];
+const TABS_GLOBAL  = ['overview','commands','skills','plans','sessions','settings','mcp','stats','raw'];
+const TABS_PROJECT = ['map','overview','commands','skills','plans','sessions','settings','mcp','stats','raw'];
 
 const TAB_META = {
   map:      { label: 'Map' },
+  sessions: { label: 'Sessions' },
   overview: { label: 'Overview' },
   commands: { label: 'Commands' },
   skills:   { label: 'Skills' },
@@ -85,6 +111,20 @@ const API = {
   file(filePath, projectPath) {
     const qs = projectPath ? `&project=${encodeURIComponent(projectPath)}` : '';
     return this.get(`/api/file?path=${encodeURIComponent(filePath)}${qs}`);
+  },
+  sessions(projectPath, limit = 50, offset = 0) {
+    return this.get(`/api/sessions?project=${encodeURIComponent(projectPath)}&limit=${limit}&offset=${offset}`);
+  },
+  sessionDetail(id, projectPath) {
+    return this.get(`/api/sessions/${id}?project=${encodeURIComponent(projectPath)}`);
+  },
+  history(projectPath, limit = 200) {
+    const qs = projectPath ? `?project=${encodeURIComponent(projectPath)}&limit=${limit}` : `?limit=${limit}`;
+    return this.get(`/api/history${qs}`);
+  },
+  toolStats(projectPath, days = 30) {
+    const qs = projectPath ? `?project=${encodeURIComponent(projectPath)}&days=${days}` : `?days=${days}`;
+    return this.get(`/api/stats/tools${qs}`);
   }
 };
 
@@ -200,6 +240,14 @@ async function selectProject(path) {
   State.activeNodeId = null;
   State.analysis    = null;
   State.analysisLoading = true;
+  // Reset session state for new project
+  State.sessionsList = null;
+  State.sessionDetail = null;
+  State.sessionViewMode = 'list';
+  State.activeSessionId = null;
+  State.historyEntries = null;
+  State.historyMode = false;
+  State.statsToolData = null;
   renderApp();
   renderProjectList();
 
@@ -270,6 +318,7 @@ function renderTabContent() {
     commands: renderCommands,
     skills:   renderSkills,
     plans:    renderPlans,
+    sessions: renderSessions,
     settings: renderSettings,
     mcp:      renderMCP,
     stats:    renderStats,
@@ -967,36 +1016,130 @@ function renderCommandCard(c, prefix = '') {
   });
 }
 
-// ─── Skills Tab ───────────────────────────────────────────────
+// ─── Skills Tab (Enhanced) ────────────────────────────────────
 function renderSkills() {
-  const skills = State.scan.global.skills || [];
-  if (!skills.length) {
+  const globalSkills = State.scan.global.skills || [];
+  const localSkills  = State.scan.project?.localSkills || [];
+  const isProject    = State.mode === 'project';
+  const totalCount   = globalSkills.length + localSkills.length;
+
+  const q = State.skillFilter.toLowerCase();
+  const filterSkill = s => !q || s.name.toLowerCase().includes(q) ||
+    (s.meta?.description || '').toLowerCase().includes(q) || s.excerpt.toLowerCase().includes(q);
+  const filteredGlobal = globalSkills.filter(filterSkill);
+  const filteredLocal  = localSkills.filter(filterSkill);
+
+  const globalNames = new Set(globalSkills.map(s => s.name));
+  const localNames  = new Set(localSkills.map(s => s.name));
+
+  const comparisonHtml = isProject && (globalSkills.length || localSkills.length) ? `
+    <div class="section" style="margin-bottom:16px">
+      <div class="section-title">Skill Comparison</div>
+      <div class="skill-comparison">
+        ${[...new Set([...globalNames, ...localNames])].sort().map(name => {
+          const inGlobal = globalNames.has(name);
+          const inLocal  = localNames.has(name);
+          const scope = inGlobal && inLocal ? 'both' : inGlobal ? 'global' : 'local';
+          const label = scope === 'both' ? 'Both' : scope === 'global' ? 'Global' : 'Project';
+          return `<div class="skill-comparison-row">
+            <span class="skill-scope-badge ${scope}">${label}</span>
+            <span style="color:var(--text-primary)">${escapeHtml(name)}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>` : '';
+
+  if (!totalCount) {
     return `<div>
-      <div class="tab-header"><h2>Skills <span class="badge">0</span></h2></div>
+      <div class="tab-header"><h2>Skills <span class="badge">0</span></h2>
+        <button class="btn-icon" onclick="openImportModal('skill')" title="Import">↑ Import</button>
+      </div>
       <div class="empty-state" style="min-height:200px">
         <div class="empty-state-icon">◻</div>
         <h3>No skills configured</h3>
-        <p>The <span class="inline-code">~/.claude/skills/</span> directory exists but is empty.</p>
+        <p>Create skills in <span class="inline-code">~/.claude/skills/</span> or import from a teammate.</p>
       </div>
     </div>`;
   }
 
-  const q = State.skillFilter.toLowerCase();
-  const filtered = q
-    ? skills.filter(s => s.name.toLowerCase().includes(q) || s.excerpt.toLowerCase().includes(q))
-    : skills;
-
   return `<div>
     <div class="tab-header">
-      <h2>Skills <span class="badge">${skills.length}</span></h2>
-      <input class="search-input" placeholder="Filter skills…"
-             value="${escapeAttr(State.skillFilter)}"
-             oninput="State.skillFilter=this.value;renderTabContent()">
+      <h2>Skills <span class="badge">${totalCount}</span></h2>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input class="search-input" placeholder="Filter skills…"
+               value="${escapeAttr(State.skillFilter)}"
+               oninput="State.skillFilter=this.value;renderTabContent()">
+        <button class="btn-icon" onclick="openImportModal('skill')" title="Import">↑ Import</button>
+        <button class="btn-icon" onclick="openBundleModal()" title="Export Bundle">↓ Export</button>
+      </div>
     </div>
+    ${comparisonHtml}
+    ${isProject && filteredLocal.length ? `
+      <div class="skill-scope-label">Project Skills (${filteredLocal.length})</div>
+      <div class="cards-grid" style="margin-bottom:16px">
+        ${filteredLocal.map(s => renderSkillCard(s, 'lskill_', 'project')).join('')}
+      </div>` : ''}
+    <div class="skill-scope-label">${isProject ? 'Global' : 'All'} Skills (${filteredGlobal.length})</div>
     <div class="cards-grid">
-      ${filtered.map(s => renderCommandCard(s, 'skill_')).join('')}
+      ${filteredGlobal.length
+        ? filteredGlobal.map(s => renderSkillCard(s, 'gskill_', 'global')).join('')
+        : `<div class="empty-state" style="min-height:80px"><p>No global skills${q ? ' matching filter' : ''}</p></div>`}
     </div>
   </div>`;
+}
+
+function renderSkillCard(skill, prefix, scope) {
+  const m = skill.meta || {};
+  const safeId = (prefix + skill.name).replace(/[^a-z0-9_-]/gi, '_');
+  const badges = [];
+  if (m.userInvocable) badges.push('<span class="skill-badge invocable">user-invocable</span>');
+  if (m.agent) badges.push(`<span class="skill-badge agent">agent: ${escapeHtml(m.agent)}</span>`);
+  if (m.argumentHint) badges.push(`<span class="skill-badge args">$ARGS: ${escapeHtml(m.argumentHint)}</span>`);
+  if (m.disableModelInvocation) badges.push('<span class="skill-badge no-model">no-model</span>');
+  if (skill.isFolder) badges.push('<span class="skill-badge" style="background:var(--bg-surface);color:var(--text-muted)">folder</span>');
+
+  const toolsHtml = m.allowedTools?.length
+    ? `<div class="skill-tools-row">${m.allowedTools.map(t => `<span class="skill-tool-badge">${escapeHtml(t)}</span>`).join('')}</div>`
+    : '';
+
+  return `<div class="skill-card" id="card-${safeId}">
+    <div class="skill-card-header" onclick="toggleSkillBody('${safeId}')">
+      <div style="flex:1;min-width:0">
+        <div class="skill-card-title">${escapeHtml(m.displayName || skill.name)}</div>
+        ${m.description ? `<div class="skill-card-desc">${escapeHtml(m.description)}</div>` : `<div class="skill-card-desc">${escapeHtml(skill.excerpt)}</div>`}
+      </div>
+      <div class="skill-card-actions">
+        <button class="btn-icon" onclick="event.stopPropagation();exportSkill('${escapeAttr(skill.name)}','${scope}')" title="Export">↓</button>
+        <span style="font-size:11px;color:var(--text-muted)">${skill.wordCount}w</span>
+      </div>
+    </div>
+    ${badges.length ? `<div class="skill-meta-row">${badges.join('')}</div>` : ''}
+    ${toolsHtml}
+    <div class="skill-card-body hidden" id="body-${safeId}" data-raw="${escapeAttr(skill.body)}"></div>
+  </div>`;
+}
+
+function toggleSkillBody(id) {
+  const body = document.getElementById(`body-${id}`);
+  if (!body) return;
+  const isOpen = body.classList.toggle('visible');
+  body.classList.toggle('hidden', !isOpen);
+  if (isOpen && !body.dataset.rendered) {
+    body.dataset.rendered = '1';
+    const mdDiv = document.createElement('div');
+    mdDiv.className = 'markdown-body';
+    try {
+      mdDiv.innerHTML = marked.parse(body.dataset.raw || '');
+      mdDiv.querySelectorAll('pre code').forEach(b => { if (typeof hljs !== 'undefined') hljs.highlightElement(b); });
+    } catch { mdDiv.textContent = body.dataset.raw; }
+    body.appendChild(mdDiv);
+    attachCopyButtons(body);
+  }
+}
+
+function exportSkill(name, scope) {
+  const project = State.mode === 'project' ? State.projectPath : '';
+  window.location.href = `/api/skills/export?name=${encodeURIComponent(name)}&scope=${scope}&project=${encodeURIComponent(project)}`;
 }
 
 // ─── Plans Tab ────────────────────────────────────────────────
@@ -1187,7 +1330,7 @@ function renderMcpServers(mcp) {
   }).join('');
 }
 
-// ─── Stats Tab ────────────────────────────────────────────────
+// ─── Stats Tab (Enhanced) ─────────────────────────────────────
 function renderStats() {
   const stats = State.scan.global.stats;
   if (!stats) {
@@ -1199,6 +1342,50 @@ function renderStats() {
   const totalSessions = daily.reduce((s, d) => s + d.sessionCount, 0);
   const totalTools    = daily.reduce((s, d) => s + d.toolCallCount, 0);
   const activeDays    = daily.length;
+
+  // Model usage breakdown
+  const modelUsage = stats.modelUsage || {};
+  const modelNames = Object.keys(modelUsage);
+  const maxModelTokens = Math.max(...modelNames.map(m => (modelUsage[m].outputTokens || 0) + (modelUsage[m].inputTokens || 0)), 1);
+  const modelRows = modelNames.map(m => {
+    const u = modelUsage[m];
+    const total = (u.inputTokens || 0) + (u.outputTokens || 0);
+    const pct = (total / maxModelTokens * 100).toFixed(0);
+    const colors = { 'claude-opus-4-6': '#00d4aa', 'claude-sonnet-4-6': '#4fa3e0', 'claude-haiku-4-5-20251001': '#d29921' };
+    const color = colors[m] || '#9b59b6';
+    return `<div class="model-usage-row">
+      <span class="model-usage-name">${escapeHtml(m)}</span>
+      <div class="model-usage-bar-bg"><div class="model-usage-bar" style="width:${pct}%;background:${color}"></div></div>
+      <span class="model-usage-value">${formatTokens(u.outputTokens || 0)} out</span>
+    </div>`;
+  }).join('');
+
+  // Hourly heatmap
+  const hourCounts = stats.hourCounts || {};
+  const maxHour = Math.max(...Object.values(hourCounts), 1);
+  let hourCells = '';
+  for (let h = 0; h < 24; h++) {
+    const count = hourCounts[String(h)] || 0;
+    const intensity = count / maxHour;
+    const bg = count ? `rgba(0,212,170,${(intensity * 0.8 + 0.1).toFixed(2)})` : 'var(--bg-elevated)';
+    hourCells += `<div class="hour-cell" style="background:${bg}" title="${h}:00 — ${count} sessions">
+      <span class="hour-label">${h}</span>
+      ${count ? `<span class="hour-count">${count}</span>` : ''}
+    </div>`;
+  }
+
+  // Tool usage
+  const toolHtml = State.statsToolData
+    ? renderToolBreakdown(State.statsToolData.toolUsage, `${State.statsToolData.sessionsScanned} sessions scanned`)
+    : `<button class="btn-primary" onclick="loadToolStats()" ${State.statsToolLoading ? 'disabled' : ''}>
+        ${State.statsToolLoading ? 'Scanning sessions…' : 'Load Tool Analytics'}
+       </button>`;
+
+  // Longest session
+  const longest = stats.longestSession;
+  const longestHtml = longest
+    ? `${renderMetricCard('Longest Session', longest.messageCount + ' msgs', longest.duration ? (longest.duration / 60000).toFixed(0) + 'm' : '')}`
+    : '';
 
   const sorted = [...daily].sort((a, b) => b.date.localeCompare(a.date));
   const tableRows = sorted.map(d =>
@@ -1216,7 +1403,20 @@ function renderStats() {
       ${renderMetricCard('Tool Calls', formatNum(totalTools), 'all time')}
       ${renderMetricCard('Sessions', formatNum(totalSessions), 'all time')}
       ${renderMetricCard('Active Days', activeDays, 'with activity')}
+      ${longestHtml}
+      ${stats.firstSessionDate ? renderMetricCard('First Session', formatDate(stats.firstSessionDate), '') : ''}
     </div>
+
+    ${modelNames.length ? `<div class="section">
+      <div class="section-title">Model Usage</div>
+      <div class="model-usage-table">${modelRows}</div>
+    </div>` : ''}
+
+    <div class="section">
+      <div class="section-title">Activity by Hour</div>
+      <div class="hour-grid">${hourCells}</div>
+    </div>
+
     <div class="section">
       <div class="stats-chart-wrap">
         <div class="stats-chart-title">Daily Activity — last ${Math.min(daily.length, 30)} days</div>
@@ -1227,6 +1427,12 @@ function renderStats() {
         </div>
       </div>
     </div>
+
+    <div class="section">
+      <div class="section-title">Tool Usage</div>
+      ${toolHtml}
+    </div>
+
     <div class="section">
       <div class="section-title">Daily Detail</div>
       <table class="data-table">
@@ -1240,6 +1446,44 @@ function renderStats() {
       </table>
     </div>
   </div>`;
+}
+
+function formatTokens(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return String(n);
+}
+
+function renderToolBreakdown(toolUsage, subtitle) {
+  const entries = Object.entries(toolUsage).sort((a, b) => b[1] - a[1]);
+  if (!entries.length) return `<p style="font-size:12px;color:var(--text-muted)">No tool usage data</p>`;
+  const maxCount = entries[0][1];
+  return `<p style="font-size:11px;color:var(--text-muted);margin-bottom:8px">${escapeHtml(subtitle)}</p>
+    <div class="tool-breakdown-list">
+      ${entries.map(([name, count]) => {
+        const pct = (count / maxCount * 100).toFixed(0);
+        return `<div class="tool-breakdown-row">
+          <span class="tool-breakdown-name">${escapeHtml(name)}</span>
+          <div class="tool-breakdown-bar-bg"><div class="tool-breakdown-bar" style="width:${pct}%"></div></div>
+          <span class="tool-breakdown-count">${formatNum(count)}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+}
+
+async function loadToolStats() {
+  State.statsToolLoading = true;
+  renderTabContent();
+  try {
+    const project = State.mode === 'project' ? State.projectPath : null;
+    State.statsToolData = await API.toolStats(project);
+  } catch (e) {
+    State.statsToolData = { toolUsage: {}, sessionsScanned: 0, error: e.message };
+  }
+  State.statsToolLoading = false;
+  renderTabContent();
+  requestAnimationFrame(() => initStatsChart());
 }
 
 function initStatsChart() {
@@ -1437,6 +1681,388 @@ async function onTreeFileClick(filePath) {
   State.rawFileLoading = false;
   renderTabContent();
   requestAnimationFrame(() => attachCopyButtons());
+}
+
+// ─── Sessions Tab ─────────────────────────────────────────────
+function renderSessions() {
+  if (State.sessionViewMode === 'detail' && State.activeSessionId) {
+    return renderSessionDetail();
+  }
+  if (State.historyMode) return renderCommandHistory();
+  return renderSessionsList();
+}
+
+function renderSessionsList() {
+  const projectPath = State.mode === 'project' ? State.projectPath : '';
+
+  // Auto-load if not loaded
+  if (!State.sessionsList && !State.sessionsLoading) {
+    loadSessionsList();
+    return `<div class="loading-state"><div class="spinner"></div><p>Loading sessions…</p></div>`;
+  }
+  if (State.sessionsLoading && !State.sessionsList) {
+    return `<div class="loading-state"><div class="spinner"></div><p>Loading sessions…</p></div>`;
+  }
+
+  const sessions = State.sessionsList?.sessions || [];
+  const q = State.sessionsFilter.toLowerCase();
+  const filtered = q ? sessions.filter(s => s.title.toLowerCase().includes(q)) : sessions;
+
+  return `<div>
+    <div class="tab-header">
+      <h2>Sessions <span class="badge">${sessions.length}</span></h2>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div class="session-toggle">
+          <button class="session-toggle-btn active" onclick="State.historyMode=false;renderTabContent()">Sessions</button>
+          <button class="session-toggle-btn" onclick="State.historyMode=true;State.historyEntries=null;renderTabContent()">Command History</button>
+        </div>
+        <input class="search-input" placeholder="Filter sessions…"
+               value="${escapeAttr(State.sessionsFilter)}"
+               oninput="State.sessionsFilter=this.value;renderTabContent()">
+      </div>
+    </div>
+    ${!projectPath ? '<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Select a project from the sidebar to see its sessions.</p>' : ''}
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${filtered.length
+        ? filtered.map(s => {
+            const duration = s.startedAt && s.endedAt
+              ? formatDuration(new Date(s.endedAt) - new Date(s.startedAt))
+              : '';
+            return `<div class="session-card" onclick="openSessionDetail('${escapeAttr(s.id)}')">
+              <div class="session-card-title">${escapeHtml(s.title)}</div>
+              <div class="session-card-meta">
+                ${s.gitBranch ? `<span class="session-badge branch">${escapeHtml(s.gitBranch)}</span>` : ''}
+                ${s.modelsUsed?.length ? s.modelsUsed.map(m => `<span class="session-badge model">${escapeHtml(m.split('-').slice(-2).join('-'))}</span>`).join('') : ''}
+                <span>${s.messageCount} msgs</span>
+                <span>${s.toolCallCount} tools</span>
+                ${duration ? `<span>${duration}</span>` : ''}
+                <span>${formatBytes(s.fileSize)}</span>
+                ${s.startedAt ? `<span>${timeSince(s.startedAt)}</span>` : ''}
+              </div>
+            </div>`;
+          }).join('')
+        : `<div class="empty-state" style="min-height:120px"><p>${projectPath ? 'No sessions found' : 'Select a project to browse sessions'}</p></div>`}
+    </div>
+  </div>`;
+}
+
+function formatDuration(ms) {
+  if (ms < 60000) return Math.round(ms / 1000) + 's';
+  if (ms < 3600000) return Math.round(ms / 60000) + 'm';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.round((ms % 3600000) / 60000);
+  return `${h}h ${m}m`;
+}
+
+async function loadSessionsList() {
+  const projectPath = State.mode === 'project' ? State.projectPath : '';
+  if (!projectPath) { State.sessionsList = { sessions: [], total: 0 }; renderTabContent(); return; }
+  State.sessionsLoading = true;
+  try {
+    State.sessionsList = await API.sessions(projectPath);
+  } catch (e) {
+    State.sessionsList = { sessions: [], total: 0, error: e.message };
+  }
+  State.sessionsLoading = false;
+  renderTabContent();
+}
+
+async function openSessionDetail(id) {
+  State.activeSessionId = id;
+  State.sessionViewMode = 'detail';
+  State.sessionDetailLoading = true;
+  State.sessionDetail = null;
+  renderTabContent();
+
+  const projectPath = State.mode === 'project' ? State.projectPath : '';
+  try {
+    State.sessionDetail = await API.sessionDetail(id, projectPath);
+  } catch (e) {
+    State.sessionDetail = { error: e.message };
+  }
+  State.sessionDetailLoading = false;
+  renderTabContent();
+}
+
+function renderSessionDetail() {
+  if (State.sessionDetailLoading) {
+    return `<div class="loading-state"><div class="spinner"></div><p>Loading conversation…</p></div>`;
+  }
+
+  const data = State.sessionDetail;
+  if (!data || data.error) {
+    return `<div>
+      <button class="btn-secondary" onclick="State.sessionViewMode='list';renderTabContent()">← Back</button>
+      <div class="error-state" style="margin-top:12px"><p>${escapeHtml(data?.error || 'Failed to load session')}</p></div>
+    </div>`;
+  }
+
+  const session = data.session;
+  const summary = data.summary;
+  const turns   = data.turns || [];
+
+  // Tool breakdown
+  const toolEntries = Object.entries(summary.toolBreakdown || {}).sort((a, b) => b[1] - a[1]);
+  const maxTool = toolEntries.length ? toolEntries[0][1] : 1;
+
+  return `<div>
+    <button class="btn-secondary" onclick="State.sessionViewMode='list';renderTabContent()" style="margin-bottom:12px">← Back to Sessions</button>
+
+    <div class="session-detail-header">
+      <div style="font-size:14px;font-weight:600;color:var(--text-primary)">${escapeHtml(turns[0]?.userMessage?.slice(0, 80) || 'Session')}</div>
+      <div class="session-detail-meta">
+        ${session.gitBranch ? `<span class="session-badge branch">${escapeHtml(session.gitBranch)}</span>` : ''}
+        ${summary.modelsUsed?.map(m => `<span class="session-badge model">${escapeHtml(m)}</span>`).join('') || ''}
+        <span>${session.version || ''}</span>
+        <span>${session.startedAt ? new Date(session.startedAt).toLocaleString() : ''}</span>
+      </div>
+    </div>
+
+    <div class="session-summary">
+      <div class="session-summary-card">
+        <div class="session-summary-label">Conversation Turns</div>
+        <div class="session-summary-value">${summary.totalTurns}</div>
+      </div>
+      <div class="session-summary-card">
+        <div class="session-summary-label">Output Tokens</div>
+        <div class="session-summary-value">${formatTokens(summary.totalTokens?.output || 0)}</div>
+      </div>
+      <div class="session-summary-card">
+        <div class="session-summary-label">Cache Read</div>
+        <div class="session-summary-value">${formatTokens(summary.totalTokens?.cacheRead || 0)}</div>
+      </div>
+    </div>
+
+    ${toolEntries.length ? `<div class="section">
+      <div class="section-title">Tool Usage</div>
+      <div class="tool-breakdown-list">
+        ${toolEntries.slice(0, 15).map(([name, count]) => `<div class="tool-breakdown-row">
+          <span class="tool-breakdown-name">${escapeHtml(name)}</span>
+          <div class="tool-breakdown-bar-bg"><div class="tool-breakdown-bar" style="width:${(count / maxTool * 100).toFixed(0)}%"></div></div>
+          <span class="tool-breakdown-count">${count}</span>
+        </div>`).join('')}
+      </div>
+    </div>` : ''}
+
+    <div class="section">
+      <div class="section-title">Conversation (${turns.length} turns)</div>
+      <div class="session-timeline">
+        ${turns.map(t => `<div class="turn-item">
+          <div class="turn-user">
+            <div class="turn-user-label">You</div>
+            <div class="turn-user-text">${escapeHtml(t.userMessage || '')}</div>
+          </div>
+          ${t.assistant ? `<div class="turn-assistant">
+            <div class="turn-assistant-label">Claude${t.assistant.model ? ` (${t.assistant.model.split('-').slice(-2).join('-')})` : ''}</div>
+            <div class="turn-assistant-text">${escapeHtml(t.assistant.text || '(no text response)')}</div>
+            ${t.assistant.toolCalls?.length ? `<div class="turn-tool-calls">
+              ${t.assistant.toolCalls.map(tc => `<span class="tool-call-badge" title="${escapeAttr(tc.inputPreview)}">${escapeHtml(tc.name)}</span>`).join('')}
+            </div>` : ''}
+            <div class="turn-meta">
+              ${t.timestamp ? `<span>${new Date(t.timestamp).toLocaleTimeString()}</span>` : ''}
+              ${t.assistant.tokenUsage ? `<span>${formatTokens(t.assistant.tokenUsage.output)} tokens out</span>` : ''}
+            </div>
+          </div>` : ''}
+        </div>`).join('')}
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderCommandHistory() {
+  if (!State.historyEntries && !State.sessionsLoading) {
+    loadCommandHistory();
+    return `<div class="loading-state"><div class="spinner"></div><p>Loading history…</p></div>`;
+  }
+  if (State.sessionsLoading && !State.historyEntries) {
+    return `<div class="loading-state"><div class="spinner"></div><p>Loading history…</p></div>`;
+  }
+
+  const entries = State.historyEntries || [];
+
+  // Group by day
+  const days = {};
+  for (const e of entries) {
+    const day = e.timestamp ? new Date(e.timestamp).toISOString().slice(0, 10) : 'Unknown';
+    if (!days[day]) days[day] = [];
+    days[day].push(e);
+  }
+
+  return `<div>
+    <div class="tab-header">
+      <h2>Command History <span class="badge">${entries.length}</span></h2>
+      <div class="session-toggle">
+        <button class="session-toggle-btn" onclick="State.historyMode=false;renderTabContent()">Sessions</button>
+        <button class="session-toggle-btn active">Command History</button>
+      </div>
+    </div>
+    ${Object.entries(days).map(([day, items]) => `
+      <div class="history-day-header">${day}</div>
+      ${items.map(e => `<div class="history-entry">
+        <span class="history-entry-text">${escapeHtml(e.display)}</span>
+        ${e.project ? `<span class="history-entry-project">${escapeHtml(projectName(e.project))}</span>` : ''}
+        <span class="history-entry-time">${e.timestamp ? new Date(e.timestamp).toLocaleTimeString() : ''}</span>
+      </div>`).join('')}
+    `).join('')}
+    ${!entries.length ? '<div class="empty-state" style="min-height:120px"><p>No command history found</p></div>' : ''}
+  </div>`;
+}
+
+async function loadCommandHistory() {
+  State.sessionsLoading = true;
+  try {
+    const projectPath = State.mode === 'project' ? State.projectPath : '';
+    const data = await API.history(projectPath);
+    State.historyEntries = data.entries || [];
+  } catch { State.historyEntries = []; }
+  State.sessionsLoading = false;
+  renderTabContent();
+}
+
+// ─── Import/Export Modals ─────────────────────────────────────
+function openImportModal(type) {
+  State.importModalOpen = true;
+  document.getElementById('import-overlay')?.classList.remove('hidden');
+  document.getElementById('import-modal-title').textContent = type === 'skill' ? 'Import Skill' : 'Import Command';
+  document.getElementById('import-textarea').value = '';
+  document.getElementById('import-preview').classList.add('hidden');
+  document.getElementById('import-confirm-btn').disabled = true;
+  // Set scope based on current mode
+  const scopeEl = document.getElementById('import-scope');
+  if (scopeEl && State.mode === 'project') scopeEl.value = 'project';
+}
+
+function closeImportModal() {
+  State.importModalOpen = false;
+  document.getElementById('import-overlay')?.classList.add('hidden');
+}
+
+function handleImportDrop(event) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('dragover');
+  const file = event.dataTransfer?.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    document.getElementById('import-textarea').value = reader.result;
+    previewImport();
+  };
+  reader.readAsText(file);
+}
+
+function previewImport() {
+  const text = document.getElementById('import-textarea').value.trim();
+  const previewEl = document.getElementById('import-preview');
+  const confirmBtn = document.getElementById('import-confirm-btn');
+  if (!text) {
+    previewEl.classList.add('hidden');
+    confirmBtn.disabled = true;
+    return;
+  }
+
+  // Try to detect if it's a bundle JSON or a skill/command markdown
+  try {
+    const json = JSON.parse(text);
+    if (json.type === 'claude-map-bundle') {
+      const skills = json.skills?.length || 0;
+      const commands = json.commands?.length || 0;
+      previewEl.innerHTML = `<strong>Bundle detected</strong>: ${skills} skill${skills !== 1 ? 's' : ''}, ${commands} command${commands !== 1 ? 's' : ''}${json.claudeMd ? ', CLAUDE.md' : ''}`;
+      previewEl.classList.remove('hidden');
+      confirmBtn.disabled = false;
+      confirmBtn.dataset.mode = 'bundle';
+      confirmBtn.dataset.bundle = text;
+      return;
+    }
+  } catch { /* not JSON, treat as markdown */ }
+
+  // Markdown skill/command
+  const nameMatch = text.match(/^---[\s\S]*?name:\s*(.+?)[\s\r\n]/m);
+  const name = nameMatch ? nameMatch[1].trim() : 'imported-skill';
+  previewEl.innerHTML = `<strong>Skill:</strong> ${escapeHtml(name)} (${text.split(/\s+/).length} words)`;
+  previewEl.classList.remove('hidden');
+  confirmBtn.disabled = false;
+  confirmBtn.dataset.mode = 'single';
+  confirmBtn.dataset.name = name;
+}
+
+async function confirmImport() {
+  const btn = document.getElementById('import-confirm-btn');
+  const text = document.getElementById('import-textarea').value.trim();
+  const scope = document.getElementById('import-scope').value;
+
+  if (btn.dataset.mode === 'bundle') {
+    try {
+      const bundle = JSON.parse(text);
+      const result = await fetch('/api/import/bundle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          bundle,
+          target: scope,
+          projectPath: State.projectPath || '',
+          overwrite: false
+        })
+      }).then(r => r.json());
+      alert(`Imported: ${result.imported?.skills || 0} skills, ${result.imported?.commands || 0} commands${result.skipped?.length ? `\nSkipped (existing): ${result.skipped.join(', ')}` : ''}`);
+    } catch (e) { alert('Import failed: ' + e.message); }
+  } else {
+    const name = btn.dataset.name || 'imported-skill';
+    try {
+      await fetch('/api/skills/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, content: text, scope, projectPath: State.projectPath || '' })
+      }).then(r => r.json());
+      alert(`Skill "${name}" imported successfully`);
+    } catch (e) { alert('Import failed: ' + e.message); }
+  }
+
+  closeImportModal();
+  doRefresh();
+}
+
+function openBundleModal() {
+  document.getElementById('bundle-overlay')?.classList.remove('hidden');
+  if (State.mode === 'project') {
+    document.getElementById('bundle-scope').value = 'project';
+  }
+}
+
+function closeBundleModal() {
+  document.getElementById('bundle-overlay')?.classList.add('hidden');
+}
+
+async function confirmBundleExport() {
+  const items = [];
+  if (document.getElementById('bundle-skills')?.checked) items.push('skills');
+  if (document.getElementById('bundle-commands')?.checked) items.push('commands');
+  if (document.getElementById('bundle-claudemd')?.checked) items.push('claudeMd');
+  if (!items.length) { alert('Select at least one item to export'); return; }
+
+  const scope = document.getElementById('bundle-scope').value;
+
+  // Use form submit to trigger download
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = '/api/export/bundle';
+  form.style.display = 'none';
+
+  // We need to POST JSON, so use fetch instead
+  try {
+    const res = await fetch('/api/export/bundle', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items, scope, projectPath: State.projectPath || '' })
+    });
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `claude-map-bundle-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch (e) { alert('Export failed: ' + e.message); }
+  closeBundleModal();
 }
 
 // ─── Export & Refresh ─────────────────────────────────────────

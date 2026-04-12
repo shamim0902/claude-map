@@ -37,9 +37,17 @@ Default port: **3131** (override with `PORT` env var).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/scan` | Deep scan of `~/.claude/` config. Optional `?project=<path>` for project-specific data |
+| GET | `/api/scan` | Deep scan of `~/.claude/` config. Optional `?project=<path>` for project-specific data. Returns `localSkills` and `localCommands` on project. |
 | GET | `/api/analyze` | Full project analysis with connection map data. Requires `?project=<path>` |
 | GET | `/api/project-status` | Fast status check (full/partial/none/missing). Requires `?path=<path>` |
+| GET | `/api/sessions` | List session JSONL files for a project. `?project=<path>&limit=50&offset=0` |
+| GET | `/api/sessions/:id` | Full conversation timeline for a session. `?project=<path>` |
+| GET | `/api/history` | Command history from `~/.claude/history.jsonl`. Optional `?project=<path>&limit=200` |
+| GET | `/api/stats/tools` | Tool usage frequency by scanning session JSONL files. `?project=<path>&days=30` |
+| GET | `/api/skills/export` | Download a single skill as `.md`. `?name=<name>&scope=global\|project&project=<path>` |
+| POST | `/api/skills/import` | Import a skill. Body: `{ name, content, scope, projectPath }` |
+| POST | `/api/export/bundle` | Export bundle of skills+commands+CLAUDE.md. Body: `{ items, scope, projectPath }` |
+| POST | `/api/import/bundle` | Import bundle. Body: `{ bundle, target, projectPath, overwrite }` |
 | GET | `/api/file` | Read a single file. Requires `?path=<file>&project=<path>` |
 | GET | `/api/export` | Download scan result as JSON. Optional `?project=<path>` |
 | GET | `/api/events` | SSE stream — `connected`, `cache-invalidated` events |
@@ -61,7 +69,7 @@ All UI flows through a single `State` object. Any mutation calls `renderApp()` w
 - **`fetchAllProjectStatuses()`** — batch calls to `/api/project-status` (5 at a time) for sidebar status icons
 
 ### Tab system
-- Global tabs: `overview`, `commands`, `skills`, `plans`, `settings`, `mcp`, `stats`, `raw`
+- Global tabs: `overview`, `commands`, `skills`, `plans`, `sessions`, `settings`, `mcp`, `stats`, `raw`
 - Project tabs: `map` + all global tabs
 - Each tab has a `render<TabName>()` function returning an HTML string
 
@@ -100,7 +108,11 @@ Stored in `~/.claude/inspector-projects.json` (backward-compatible filename from
 - Always use `escapeHtml()` / `escapeAttr()` for any user-facing string in innerHTML
 - CSS colors are CSS custom properties — never hardcode colors, use `var(--name)`
 - Frontend functions are global (no module system) — all attached to window scope
-- `renderExpandableCard()` is the shared component for command/skill/plan cards
+- `renderExpandableCard()` is the shared component for command/plan cards
+- `renderSkillCard()` is the enhanced skill card component with metadata badges, allowed-tools, export button
+- `renderSessions()` / `renderSessionDetail()` / `renderCommandHistory()` — Sessions tab with conversation timeline
+- `renderToolBreakdown()` — horizontal bar chart for tool usage
+- Import/export modals: `openImportModal()`, `confirmImport()`, `openBundleModal()`, `confirmBundleExport()`
 - Expandable cards use `data-raw` attribute + lazy markdown rendering on first open
 - File tree uses recursive `renderTreeNode()` with `State.fileTreeExpanded` Set
 - Stats chart is a hand-drawn canvas chart (no chart library)

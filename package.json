@@ -1,6 +1,6 @@
 {
   "name": "claude-map",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "Visual connection map for Claude Code project configurations",
   "main": "server.js",
   "scripts": {

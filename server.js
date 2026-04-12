@@ -162,6 +162,22 @@ function readCommandsDir(dir) {
   return entries;
 }
 
+function buildSkillMeta(data, fallbackName) {
+  if (!data) data = {};
+  const allowedToolsRaw = data['allowed-tools'] || data.allowedTools || '';
+  return {
+    displayName: data.name || fallbackName,
+    description: data.description || null,
+    allowedTools: allowedToolsRaw
+      ? String(allowedToolsRaw).split(',').map(s => s.trim()).filter(Boolean)
+      : [],
+    argumentHint: data['argument-hint'] || data.argumentHint || null,
+    userInvocable: data['user-invocable'] !== false,
+    disableModelInvocation: !!data['disable-model-invocation'],
+    agent: data.agent || null,
+  };
+}
+
 function readSkillsDir(dir) {
   const skillsDir = path.join(dir, 'skills');
   if (!fs.existsSync(skillsDir)) return [];
@@ -185,6 +201,7 @@ function readSkillsDir(dir) {
           filename: path.basename(filePath),
           raw,
           frontmatter: parsed.data || {},
+          meta: buildSkillMeta(parsed.data, item),
           body: parsed.content || raw,
           excerpt: excerpt(parsed.content || raw, 150),
           hasArgs: raw.includes('$ARGUMENTS'),
@@ -200,6 +217,7 @@ function readSkillsDir(dir) {
           filename: item,
           raw,
           frontmatter: parsed.data || {},
+          meta: buildSkillMeta(parsed.data, item.replace(/\.md$/, '')),
           body: parsed.content || raw,
           excerpt: excerpt(parsed.content || raw, 150),
           hasArgs: raw.includes('$ARGUMENTS'),
@@ -329,14 +347,17 @@ function readMcpJson(projectPath) {
 function readProjectConfig(projectPath) {
   if (!projectPath) return null;
   const claudeDir = path.join(projectPath, '.claude');
+  const hasClaudeDir = fs.existsSync(claudeDir);
   return {
     path: projectPath,
     projectName: path.basename(projectPath),
-    hasClaudeDir: fs.existsSync(claudeDir),
+    hasClaudeDir,
     claudeMd: readClaudeMd(projectPath) || readClaudeMd(claudeDir),
     settingsLocal: readSettingsJson(claudeDir, 'settings.local.json'),
     settings: readSettingsJson(claudeDir, 'settings.json'),
-    mcpJson: readMcpJson(projectPath)
+    mcpJson: readMcpJson(projectPath),
+    localSkills:   hasClaudeDir ? readSkillsDir(claudeDir) : [],
+    localCommands: hasClaudeDir ? readCommandsDir(claudeDir) : [],
   };
 }
 
@@ -770,6 +791,481 @@ app.get('/api/analyze', (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// ─── Sessions & History ──────────────────────────────────────────────────────
+
+function encodeProjectPath(projectPath) {
+  return projectPath.replace(/\//g, '-');
+}
+
+function getSessionDir(projectPath) {
+  const encoded = encodeProjectPath(projectPath);
+  return path.join(CLAUDE_DIR, 'projects', encoded);
+}
+
+function readSessionHead(filePath) {
+  try {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split('\n').filter(l => l.trim());
+    let sessionId = null, title = null, gitBranch = null, version = null;
+    let startedAt = null, endedAt = null, model = null;
+    let msgCount = 0, toolCount = 0;
+    const modelsUsed = new Set();
+
+    for (const line of lines) {
+      try {
+        const d = JSON.parse(line);
+        if (d.timestamp) {
+          if (!startedAt) startedAt = d.timestamp;
+          endedAt = d.timestamp;
+        }
+        if (!sessionId && d.sessionId) sessionId = d.sessionId;
+        if (!gitBranch && d.gitBranch) gitBranch = d.gitBranch;
+        if (!version && d.version) version = d.version;
+        if (d.type === 'user') {
+          msgCount++;
+          if (!title && d.message?.content && d.userType !== 'internal') {
+            const c = d.message.content;
+            let text = typeof c === 'string' ? c : Array.isArray(c) ? (c.find(b => b.type === 'text')?.text || '') : '';
+            // Skip system/agent prompts
+            if (text && !text.startsWith('-\nYou are agent') && !text.startsWith('You are agent')) {
+              title = text.slice(0, 120);
+            }
+          }
+        }
+        if (d.type === 'assistant') {
+          msgCount++;
+          const m = d.message?.model;
+          if (m) modelsUsed.add(m);
+          const content = d.message?.content;
+          if (Array.isArray(content)) {
+            toolCount += content.filter(b => b.type === 'tool_use').length;
+          }
+        }
+      } catch { /* skip malformed line */ }
+    }
+
+    const stat = fs.statSync(filePath);
+    return {
+      id: sessionId || path.basename(filePath, '.jsonl'),
+      title: title || '(untitled session)',
+      gitBranch: gitBranch || null,
+      version: version || null,
+      startedAt, endedAt,
+      messageCount: msgCount,
+      toolCallCount: toolCount,
+      modelsUsed: Array.from(modelsUsed),
+      fileSize: stat.size,
+    };
+  } catch { return null; }
+}
+
+app.get('/api/sessions', (req, res) => {
+  const projectPath = req.query.project;
+  if (!projectPath) return res.status(400).json({ error: 'Missing project parameter' });
+  const limit  = Math.min(parseInt(req.query.limit)  || 50, 200);
+  const offset = parseInt(req.query.offset) || 0;
+
+  const sessionDir = getSessionDir(path.resolve(projectPath));
+  if (!fs.existsSync(sessionDir)) return res.json({ sessions: [], total: 0, offset });
+
+  // Find all .jsonl files (direct children and in subdirs)
+  const jsonlFiles = [];
+  try {
+    for (const entry of fs.readdirSync(sessionDir)) {
+      const entryPath = path.join(sessionDir, entry);
+      const stat = fs.statSync(entryPath);
+      if (stat.isFile() && entry.endsWith('.jsonl')) {
+        jsonlFiles.push({ path: entryPath, mtime: stat.mtimeMs });
+      } else if (stat.isDirectory() && !entry.includes('subagent')) {
+        // Look for session .jsonl in session subdirs (skip subagents/)
+        for (const sub of fs.readdirSync(entryPath)) {
+          if (sub === 'subagents' || sub === 'tool-results') continue;
+          const subPath = path.join(entryPath, sub);
+          try {
+            if (sub.endsWith('.jsonl') && !sub.includes('agent') && fs.statSync(subPath).isFile()) {
+              jsonlFiles.push({ path: subPath, mtime: fs.statSync(subPath).mtimeMs });
+            }
+          } catch { /* skip */ }
+        }
+      }
+    }
+  } catch { /* permission error */ }
+
+  // Sort by modification time descending
+  jsonlFiles.sort((a, b) => b.mtime - a.mtime);
+  const total = jsonlFiles.length;
+  const page  = jsonlFiles.slice(offset, offset + limit);
+
+  const sessions = page.map(f => readSessionHead(f.path)).filter(Boolean);
+  res.json({ sessions, total, offset });
+});
+
+app.get('/api/sessions/:id', (req, res) => {
+  const projectPath = req.query.project;
+  if (!projectPath) return res.status(400).json({ error: 'Missing project parameter' });
+  const sessionId = req.params.id;
+  const sessionDir = getSessionDir(path.resolve(projectPath));
+
+  // Find the JSONL file for this session
+  let targetFile = null;
+  const directFile = path.join(sessionDir, `${sessionId}.jsonl`);
+  if (fs.existsSync(directFile)) {
+    targetFile = directFile;
+  } else {
+    // Check subdirectories
+    try {
+      for (const entry of fs.readdirSync(sessionDir)) {
+        const candidate = path.join(sessionDir, entry, `${sessionId}.jsonl`);
+        if (fs.existsSync(candidate)) { targetFile = candidate; break; }
+      }
+    } catch { /* skip */ }
+  }
+
+  if (!targetFile) return res.status(404).json({ error: 'Session not found' });
+
+  try {
+    const content = fs.readFileSync(targetFile, 'utf8');
+    const lines = content.split('\n').filter(l => l.trim());
+
+    let sessionMeta = { id: sessionId, gitBranch: null, version: null, startedAt: null, endedAt: null };
+    const turns = [];
+    const toolBreakdown = {};
+    const modelsUsed = new Set();
+    let totalInput = 0, totalOutput = 0, totalCacheRead = 0;
+    let currentTurn = null;
+
+    for (const line of lines) {
+      try {
+        const d = JSON.parse(line);
+        if (d.type === 'file-history-snapshot' || d.type === 'progress') continue;
+
+        if (!sessionMeta.gitBranch && d.gitBranch) sessionMeta.gitBranch = d.gitBranch;
+        if (!sessionMeta.version && d.version) sessionMeta.version = d.version;
+        if (d.timestamp) {
+          if (!sessionMeta.startedAt) sessionMeta.startedAt = d.timestamp;
+          sessionMeta.endedAt = d.timestamp;
+        }
+
+        if (d.type === 'user') {
+          // Start a new turn
+          const msgContent = d.message?.content;
+          let text = '';
+          if (typeof msgContent === 'string') text = msgContent;
+          else if (Array.isArray(msgContent)) text = (msgContent.find(b => b.type === 'text')?.text || '');
+
+          currentTurn = {
+            index: turns.length,
+            userMessage: text.slice(0, 2000),
+            timestamp: d.timestamp || null,
+            assistant: null
+          };
+          turns.push(currentTurn);
+        }
+
+        if (d.type === 'assistant' && currentTurn) {
+          const msg = d.message || {};
+          const model = msg.model || null;
+          if (model) modelsUsed.add(model);
+
+          const contentBlocks = msg.content || [];
+          const textParts = [];
+          const toolCalls = [];
+
+          for (const block of (Array.isArray(contentBlocks) ? contentBlocks : [])) {
+            if (block.type === 'text' && block.text) textParts.push(block.text);
+            if (block.type === 'tool_use') {
+              const inputStr = JSON.stringify(block.input || {});
+              const preview = inputStr.length > 120 ? inputStr.slice(0, 120) + '…' : inputStr;
+              toolCalls.push({ name: block.name, inputPreview: preview });
+              toolBreakdown[block.name] = (toolBreakdown[block.name] || 0) + 1;
+            }
+          }
+
+          const usage = msg.usage || {};
+          const input  = usage.input_tokens || 0;
+          const output = usage.output_tokens || 0;
+          const cacheR = usage.cache_read_input_tokens || 0;
+          totalInput  += input;
+          totalOutput += output;
+          totalCacheRead += cacheR;
+
+          // Merge with existing assistant data if multiple assistant chunks
+          if (currentTurn.assistant) {
+            if (textParts.length) currentTurn.assistant.text += '\n' + textParts.join('\n');
+            currentTurn.assistant.toolCalls.push(...toolCalls);
+            currentTurn.assistant.tokenUsage.input  += input;
+            currentTurn.assistant.tokenUsage.output += output;
+            currentTurn.assistant.tokenUsage.cacheRead += cacheR;
+          } else {
+            currentTurn.assistant = {
+              model,
+              text: textParts.join('\n').slice(0, 2000),
+              toolCalls,
+              tokenUsage: { input, output, cacheRead: cacheR }
+            };
+          }
+        }
+      } catch { /* skip malformed line */ }
+    }
+
+    res.json({
+      session: sessionMeta,
+      turns,
+      summary: {
+        totalTurns: turns.length,
+        toolBreakdown,
+        modelsUsed: Array.from(modelsUsed),
+        totalTokens: { input: totalInput, output: totalOutput, cacheRead: totalCacheRead }
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/history', (req, res) => {
+  const historyFile = path.join(CLAUDE_DIR, 'history.jsonl');
+  if (!fs.existsSync(historyFile)) return res.json({ entries: [] });
+
+  const projectFilter = req.query.project ? path.resolve(req.query.project) : null;
+  const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+
+  try {
+    const content = fs.readFileSync(historyFile, 'utf8');
+    const lines = content.split('\n').filter(l => l.trim());
+    const entries = [];
+
+    for (const line of lines) {
+      try {
+        const d = JSON.parse(line);
+        if (projectFilter && d.project && path.resolve(d.project) !== projectFilter) continue;
+        entries.push({
+          display: d.display || '',
+          timestamp: d.timestamp || null,
+          project: d.project || null,
+          sessionId: d.sessionId || null,
+        });
+      } catch { /* skip */ }
+    }
+
+    // Sort by timestamp descending, return latest
+    entries.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+    res.json({ entries: entries.slice(0, limit) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Tool Usage Stats ────────────────────────────────────────────────────────
+
+app.get('/api/stats/tools', (req, res) => {
+  const projectPath = req.query.project;
+  const days = parseInt(req.query.days) || 30;
+  const cutoff = Date.now() - days * 86400000;
+
+  // Collect JSONL files to scan
+  const filesToScan = [];
+  const projectsDir = path.join(CLAUDE_DIR, 'projects');
+  if (!fs.existsSync(projectsDir)) return res.json({ toolUsage: {}, sessionsScanned: 0 });
+
+  try {
+    const encodedDirs = projectPath
+      ? [encodeProjectPath(path.resolve(projectPath))]
+      : fs.readdirSync(projectsDir).filter(d => {
+          try { return fs.statSync(path.join(projectsDir, d)).isDirectory(); } catch { return false; }
+        });
+
+    for (const encoded of encodedDirs) {
+      const dir = path.join(projectsDir, encoded);
+      if (!fs.existsSync(dir)) continue;
+      try {
+        for (const entry of fs.readdirSync(dir)) {
+          const entryPath = path.join(dir, entry);
+          try {
+            const stat = fs.statSync(entryPath);
+            if (stat.isFile() && entry.endsWith('.jsonl') && stat.mtimeMs > cutoff) {
+              filesToScan.push(entryPath);
+            } else if (stat.isDirectory()) {
+              for (const sub of fs.readdirSync(entryPath)) {
+                if (sub.endsWith('.jsonl') && !sub.includes('agent')) {
+                  const subPath = path.join(entryPath, sub);
+                  try {
+                    if (fs.statSync(subPath).mtimeMs > cutoff) filesToScan.push(subPath);
+                  } catch { /* skip */ }
+                }
+              }
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+  } catch { /* skip */ }
+
+  const toolUsage = {};
+  let sessionsScanned = 0;
+
+  // Limit to 100 most recent files for performance
+  filesToScan.sort((a, b) => {
+    try { return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs; } catch { return 0; }
+  });
+  const toScan = filesToScan.slice(0, 100);
+
+  for (const file of toScan) {
+    try {
+      const content = fs.readFileSync(file, 'utf8');
+      sessionsScanned++;
+      for (const line of content.split('\n')) {
+        if (!line.includes('"tool_use"')) continue;
+        try {
+          const d = JSON.parse(line);
+          if (d.type !== 'assistant') continue;
+          const blocks = d.message?.content;
+          if (!Array.isArray(blocks)) continue;
+          for (const b of blocks) {
+            if (b.type === 'tool_use' && b.name) {
+              toolUsage[b.name] = (toolUsage[b.name] || 0) + 1;
+            }
+          }
+        } catch { /* skip */ }
+      }
+    } catch { /* skip */ }
+  }
+
+  res.json({ toolUsage, sessionsScanned, period: `${days}d` });
+});
+
+// ─── Skill Export/Import ─────────────────────────────────────────────────────
+
+app.get('/api/skills/export', (req, res) => {
+  const { name, scope, project } = req.query;
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+
+  const baseDir = scope === 'project' && project
+    ? path.join(path.resolve(project), '.claude', 'skills')
+    : path.join(CLAUDE_DIR, 'skills');
+
+  // Try file.md then folder/SKILL.md
+  const filePath = path.join(baseDir, `${name}.md`);
+  const folderPath = path.join(baseDir, name, 'SKILL.md');
+  const target = fs.existsSync(filePath) ? filePath : fs.existsSync(folderPath) ? folderPath : null;
+
+  if (!target) return res.status(404).json({ error: 'Skill not found' });
+
+  const content = fs.readFileSync(target, 'utf8');
+  res.setHeader('Content-Type', 'text/markdown');
+  res.setHeader('Content-Disposition', `attachment; filename="${name}.md"`);
+  res.send(content);
+});
+
+app.post('/api/skills/import', (req, res) => {
+  const { name, content, scope, projectPath } = req.body;
+  if (!name || !content) return res.status(400).json({ error: 'Missing name or content' });
+
+  const baseDir = scope === 'project' && projectPath
+    ? path.join(path.resolve(projectPath), '.claude', 'skills')
+    : path.join(CLAUDE_DIR, 'skills');
+
+  // Security: validate base dir
+  const resolvedBase = path.resolve(baseDir);
+  if (!resolvedBase.includes('.claude')) {
+    return res.status(403).json({ error: 'Invalid target directory' });
+  }
+
+  // Create dir if needed
+  if (!fs.existsSync(resolvedBase)) fs.mkdirSync(resolvedBase, { recursive: true });
+
+  const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const filePath = path.join(resolvedBase, `${safeName}.md`);
+  fs.writeFileSync(filePath, content, 'utf8');
+  invalidateCache();
+  res.json({ success: true, path: filePath });
+});
+
+// ─── Bundle Export/Import ────────────────────────────────────────────────────
+
+app.post('/api/export/bundle', async (req, res) => {
+  const { items, scope, projectPath } = req.body;
+  if (!items || !Array.isArray(items)) return res.status(400).json({ error: 'Missing items array' });
+
+  const isProject = scope === 'project' && projectPath;
+  const baseDir = isProject ? path.join(path.resolve(projectPath), '.claude') : CLAUDE_DIR;
+  const bundle = {
+    version: 1,
+    type: 'claude-map-bundle',
+    exportedAt: new Date().toISOString(),
+    source: {
+      project: isProject ? path.basename(projectPath) : 'global',
+      path: isProject ? projectPath : CLAUDE_DIR
+    }
+  };
+
+  if (items.includes('skills')) {
+    bundle.skills = (isProject ? readSkillsDir(baseDir) : readSkillsDir(CLAUDE_DIR))
+      .map(s => ({ name: s.name, filename: s.filename, raw: s.raw, isFolder: s.isFolder }));
+  }
+  if (items.includes('commands')) {
+    bundle.commands = (isProject ? readCommandsDir(baseDir) : readCommandsDir(CLAUDE_DIR))
+      .map(c => ({ name: c.name, filename: c.filename, raw: c.raw }));
+  }
+  if (items.includes('claudeMd')) {
+    const cm = isProject
+      ? (readClaudeMd(path.resolve(projectPath)) || readClaudeMd(baseDir))
+      : readClaudeMd(CLAUDE_DIR);
+    bundle.claudeMd = cm?.raw || null;
+  }
+
+  const filename = `claude-map-bundle-${new Date().toISOString().slice(0, 10)}.json`;
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Type', 'application/json');
+  res.send(JSON.stringify(bundle, null, 2));
+});
+
+app.post('/api/import/bundle', (req, res) => {
+  const { bundle, target, projectPath, overwrite } = req.body;
+  if (!bundle || bundle.type !== 'claude-map-bundle') {
+    return res.status(400).json({ error: 'Invalid bundle format' });
+  }
+
+  const isProject = target === 'project' && projectPath;
+  const baseDir = isProject ? path.join(path.resolve(projectPath), '.claude') : CLAUDE_DIR;
+  const result = { imported: { skills: 0, commands: 0 }, skipped: [] };
+
+  // Import skills
+  if (bundle.skills?.length) {
+    const skillsDir = path.join(baseDir, 'skills');
+    if (!fs.existsSync(skillsDir)) fs.mkdirSync(skillsDir, { recursive: true });
+    for (const skill of bundle.skills) {
+      const safeName = skill.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const filePath = path.join(skillsDir, `${safeName}.md`);
+      if (fs.existsSync(filePath) && !overwrite) {
+        result.skipped.push(safeName);
+        continue;
+      }
+      fs.writeFileSync(filePath, skill.raw, 'utf8');
+      result.imported.skills++;
+    }
+  }
+
+  // Import commands
+  if (bundle.commands?.length) {
+    const commandsDir = path.join(baseDir, 'commands');
+    if (!fs.existsSync(commandsDir)) fs.mkdirSync(commandsDir, { recursive: true });
+    for (const cmd of bundle.commands) {
+      const safeName = cmd.name.replace(/[^a-zA-Z0-9_-]/g, '_');
+      const filePath = path.join(commandsDir, `${safeName}.md`);
+      if (fs.existsSync(filePath) && !overwrite) {
+        result.skipped.push(safeName);
+        continue;
+      }
+      fs.writeFileSync(filePath, cmd.raw, 'utf8');
+      result.imported.commands++;
+    }
+  }
+
+  invalidateCache();
+  res.json(result);
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────

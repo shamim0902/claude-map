@@ -82,6 +82,69 @@
     </div>
   </div>
 
+  <!-- ── Import Modal ─────────────────────────────────────── -->
+  <div id="import-overlay" class="modal-overlay hidden" onclick="closeImportModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title" id="import-modal-title">Import Skills & Commands</span>
+        <button class="modal-close" onclick="closeImportModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div id="import-drop-zone" class="import-drop-zone"
+             ondragover="event.preventDefault();this.classList.add('dragover')"
+             ondragleave="this.classList.remove('dragover')"
+             ondrop="handleImportDrop(event)">
+          Drop .md or .json file here
+        </div>
+        <textarea id="import-textarea" class="import-textarea"
+                  placeholder="Or paste skill/command markdown or bundle JSON here…"
+                  oninput="previewImport()"></textarea>
+        <div id="import-preview" class="import-preview hidden"></div>
+      </div>
+      <div class="modal-footer">
+        <div class="modal-actions">
+          <select id="import-scope" class="import-scope-select">
+            <option value="global">Global (~/.claude/)</option>
+            <option value="project">Project (.claude/)</option>
+          </select>
+          <button class="btn-secondary" onclick="closeImportModal()">Cancel</button>
+          <button class="btn-primary" id="import-confirm-btn" onclick="confirmImport()" disabled>Import</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Bundle Export Modal ─────────────────────────────── -->
+  <div id="bundle-overlay" class="modal-overlay hidden" onclick="closeBundleModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title">Export Bundle</span>
+        <button class="modal-close" onclick="closeBundleModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+          Select items to include in the export bundle. Share this file with your team.
+        </p>
+        <label class="bundle-check"><input type="checkbox" id="bundle-skills" checked> Skills</label>
+        <label class="bundle-check"><input type="checkbox" id="bundle-commands" checked> Commands</label>
+        <label class="bundle-check"><input type="checkbox" id="bundle-claudemd"> CLAUDE.md</label>
+        <div style="margin-top:12px">
+          <label style="font-size:12px;color:var(--text-muted)">Scope</label>
+          <select id="bundle-scope" class="import-scope-select" style="margin-top:4px">
+            <option value="global">Global</option>
+            <option value="project">Current Project</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <div class="modal-actions">
+          <button class="btn-secondary" onclick="closeBundleModal()">Cancel</button>
+          <button class="btn-primary" onclick="confirmBundleExport()">Download Bundle</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Scripts ──────────────────────────────────────────── -->
   <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
