@@ -1,0 +1,18 @@
+{
+  "name": "claude-map",
+  "version": "2.0.0",
+  "description": "Visual connection map for Claude Code project configurations",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0",
+    "express": "^4.18.2",
+    "gray-matter": "^4.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
