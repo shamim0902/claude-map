@@ -1204,24 +1204,43 @@ function toggleClaudeMdFull() {
 
 // ─── Commands Tab ─────────────────────────────────────────────
 function renderCommands() {
-  const commands = State.scan.global.commands || [];
+  const globalCommands = State.scan.global.commands || [];
+  const localCommands  = State.scan.project?.localCommands || [];
+  const isProject      = State.mode === 'project';
+  const totalCount     = globalCommands.length + (isProject ? localCommands.length : 0);
+
   const q = State.commandFilter.toLowerCase();
-  const filtered = q
-    ? commands.filter(c => c.name.toLowerCase().includes(q) || c.excerpt.toLowerCase().includes(q) || c.body.toLowerCase().includes(q))
-    : commands;
+  const filterCmd = c => !q || c.name.toLowerCase().includes(q) || c.excerpt.toLowerCase().includes(q) || c.body.toLowerCase().includes(q);
+  const filteredGlobal = globalCommands.filter(filterCmd);
+  const filteredLocal  = localCommands.filter(filterCmd);
+
+  const localSection = isProject && localCommands.length ? `
+    <div class="section-title" style="margin:16px 0 8px">Project-local Commands</div>
+    <div class="cards-grid">
+      ${filteredLocal.length
+        ? filteredLocal.map(c => renderCommandCard(c, 'lcmd_')).join('')
+        : `<div class="empty-state" style="min-height:80px"><p>No local commands match "<strong>${escapeHtml(q)}</strong>"</p></div>`}
+    </div>` : '';
+
+  const globalSection = `
+    ${isProject && localCommands.length ? `<div class="section-title" style="margin:16px 0 8px">Global Commands</div>` : ''}
+    <div class="cards-grid">
+      ${filteredGlobal.length
+        ? filteredGlobal.map(c => renderCommandCard(c, 'cmd_')).join('')
+        : globalCommands.length
+          ? `<div class="empty-state" style="min-height:80px"><p>No global commands match "<strong>${escapeHtml(q)}</strong>"</p></div>`
+          : `<div class="empty-state" style="min-height:80px"><p>No global commands</p></div>`}
+    </div>`;
 
   return `<div>
     <div class="tab-header">
-      <h2>Commands <span class="badge">${commands.length}</span></h2>
+      <h2>Commands <span class="badge">${totalCount}</span></h2>
       <input class="search-input" placeholder="Filter commands…"
              value="${escapeAttr(State.commandFilter)}"
              oninput="State.commandFilter=this.value;renderTabContent()">
     </div>
-    <div class="cards-grid">
-      ${filtered.length
-        ? filtered.map(c => renderCommandCard(c, 'cmd_')).join('')
-        : `<div class="empty-state" style="min-height:120px"><p>No commands match "<strong>${escapeHtml(q)}</strong>"</p></div>`}
-    </div>
+    ${localSection}
+    ${globalSection}
   </div>`;
 }
 
