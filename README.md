@@ -1,8 +1,10 @@
-<p align="center">
-  <img src="public/logo.png" alt="Claude Map" width="120">
-</p>
 
-<h1 align="center">Claude Map</h1>
+<img width="1509" height="860" alt="image" src="https://github.com/user-attachments/assets/1b5372d5-3911-421d-9588-fccf3432379c" />
+
+
+<p align="center">
+  <img width="200" height="345" alt="logo-claude-map" src="https://github.com/user-attachments/assets/d4f4cb74-df2f-411a-9655-65a9fee8025e" />
+</p>
 
 <p align="center">
   Visual dashboard for inspecting and mapping Claude Code project configurations.
