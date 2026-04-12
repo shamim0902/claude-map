@@ -220,6 +220,7 @@ function selectGlobal() {
   State.activeNodeId = null;
 
   closeMobileSidebar();
+  updateUrl();
   if (!State.scan) {
     loadGlobal();
   } else {
@@ -261,6 +262,8 @@ async function selectProject(path) {
   State.historyEntries = null;
   State.historyMode = false;
   State.statsToolData = null;
+  saveProjectSlug(path);
+  updateUrl();
   renderApp();
   renderProjectList();
 
@@ -278,8 +281,107 @@ async function selectProject(path) {
 function navigate(tab) {
   State.currentTab = tab;
   State.activeNodeId = null;
+  updateUrl();
   renderApp();
 }
+
+// ─── URL Routing ──────────────────────────────────────────────
+let _suppressUrlUpdate = false;
+
+// Slug helpers — store slug→fullPath in localStorage so short names survive page reload
+function getProjectSlug(fullPath) {
+  return fullPath.split('/').filter(Boolean).pop() || 'project';
+}
+
+function saveProjectSlug(fullPath) {
+  try {
+    const map = JSON.parse(localStorage.getItem('claude-map-slugs') || '{}');
+    map[getProjectSlug(fullPath)] = fullPath;
+    localStorage.setItem('claude-map-slugs', JSON.stringify(map));
+  } catch {}
+}
+
+function resolveProjectSlug(slug) {
+  // 1. localStorage slug map (fastest, survives reload)
+  try {
+    const map = JSON.parse(localStorage.getItem('claude-map-slugs') || '{}');
+    if (map[slug]) return map[slug];
+  } catch {}
+  // 2. search pinned + scanned projects by folder name
+  const all = [
+    ...(State.pinnedProjects || []),
+    ...(State.scan?.global?.projects?.map(p => p.decodedPath).filter(Boolean) || []),
+  ];
+  return all.find(p => getProjectSlug(p) === slug) || null;
+}
+
+function buildUrl() {
+  const params = new URLSearchParams();
+  if (State.mode === 'project' && State.projectPath) {
+    params.set('project', getProjectSlug(State.projectPath));
+  }
+  if (State.currentTab && State.currentTab !== 'overview') {
+    params.set('tab', State.currentTab);
+  }
+  const qs = params.toString();
+  return qs ? `/?${qs}` : '/';
+}
+
+function updateUrl(replace = false) {
+  if (_suppressUrlUpdate) return;
+  const url = buildUrl();
+  if (replace) {
+    history.replaceState(null, '', url);
+  } else {
+    history.pushState(null, '', url);
+  }
+}
+
+window.addEventListener('popstate', () => {
+  _suppressUrlUpdate = true;
+  const params = new URLSearchParams(location.search);
+  const slug   = params.get('project');
+  const tab    = params.get('tab');
+
+  if (slug) {
+    const fullPath = resolveProjectSlug(slug);
+    if (fullPath && State.mode === 'project' && State.projectPath === fullPath) {
+      // Same project — instant tab switch
+      const t = (tab && TABS_PROJECT.includes(tab)) ? tab : 'map';
+      State.currentTab = t;
+      State.activeNodeId = null;
+      _suppressUrlUpdate = false;
+      renderApp();
+    } else if (fullPath) {
+      selectProject(fullPath).then(() => {
+        if (tab && TABS_PROJECT.includes(tab)) {
+          State.currentTab = tab;
+          renderApp();
+        }
+        _suppressUrlUpdate = false;
+      });
+    } else {
+      // Slug not resolvable — fall back to global
+      selectGlobal();
+      _suppressUrlUpdate = false;
+    }
+  } else {
+    if (State.mode === 'global') {
+      const t = (tab && TABS_GLOBAL.includes(tab)) ? tab : 'overview';
+      State.currentTab = t;
+      State.activeNodeId = null;
+      _suppressUrlUpdate = false;
+      renderApp();
+    } else {
+      selectGlobal();
+      if (tab && TABS_GLOBAL.includes(tab)) {
+        State.currentTab = tab;
+        renderApp();
+      }
+      _suppressUrlUpdate = false;
+    }
+  }
+});
 
 // ─── Render Pipeline ──────────────────────────────────────────
 function renderApp() {
@@ -2459,8 +2561,40 @@ async function browserNavigate(dirPath) {
 }
 
 // ─── Init ─────────────────────────────────────────────────────
+async function initFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const slug   = params.get('project');
+  const tab    = params.get('tab');
+
+  await loadPinnedProjects();
+
+  if (slug) {
+    const fullPath = resolveProjectSlug(slug);
+    if (fullPath) {
+      await selectProject(fullPath);
+      if (tab && TABS_PROJECT.includes(tab)) {
+        State.currentTab = tab;
+        renderApp();
+      }
+    } else {
+      // Slug not found — load global silently
+      await loadGlobal();
+    }
+  } else {
+    await loadGlobal();
+    if (tab && TABS_GLOBAL.includes(tab)) {
+      State.currentTab = tab;
+      renderApp();
+    }
+  }
+
+  // Normalize URL to canonical form without pushing a new history entry
+  history.replaceState(null, '', buildUrl());
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initSSE();
-  loadPinnedProjects().then(() => loadGlobal());
+  _suppressUrlUpdate = true;
+  initFromUrl().then(() => { _suppressUrlUpdate = false; });
 });
