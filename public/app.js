@@ -894,8 +894,12 @@ function drawMapSvgLines() {
 
 // ─── Overview Tab ─────────────────────────────────────────────
 function renderOverview() {
+  const isProject = State.mode === 'project';
+  return isProject ? renderProjectOverview() : renderGlobalOverview();
+}
+
+function renderGlobalOverview() {
   const g = State.scan.global;
-  const proj = State.scan.project;
   const s = g.settings || {};
   const stats = g.stats;
   const perms = s.permissions?.allow?.length || 0;
@@ -903,7 +907,6 @@ function renderOverview() {
   const projects = g.projects?.length || 0;
   const hooksCount = Object.values(s.hooks || {}).reduce((a, arr) => a + arr.length, 0);
 
-  // ── Usage Stats Row (from stats-cache) ──
   const daily = stats?.dailyActivity || [];
   const totalMsgs     = daily.reduce((acc, d) => acc + d.messageCount, 0);
   const totalSessions = stats?.totalSessions || daily.reduce((acc, d) => acc + d.sessionCount, 0);
@@ -919,7 +922,6 @@ function renderOverview() {
       ${renderMetricCard('Active Days', activeDays, 'with activity')}
     </div>` : '';
 
-  // ── Config Metrics Row ──
   const configRow = `
     <div class="dashboard-section-label">Configuration</div>
     <div class="metrics-row">
@@ -931,7 +933,6 @@ function renderOverview() {
       ${renderMetricCard('Projects', projects, 'known')}
     </div>`;
 
-  // ── Activity Chart (mini) ──
   const chartHtml = daily.length ? `
     <div class="section">
       <div class="section-title">Activity — last ${Math.min(daily.length, 30)} days</div>
@@ -942,52 +943,9 @@ function renderOverview() {
       </div>
     </div>` : '';
 
-  // ── Model Usage (compact) ──
-  const modelUsage = stats?.modelUsage || {};
-  const modelNames = Object.keys(modelUsage);
-  const modelHtml = modelNames.length ? (() => {
-    const maxTokens = Math.max(...modelNames.map(m => (modelUsage[m].outputTokens || 0) + (modelUsage[m].inputTokens || 0)), 1);
-    const rows = modelNames.map(m => {
-      const u = modelUsage[m];
-      const total = (u.inputTokens || 0) + (u.outputTokens || 0);
-      const pct = (total / maxTokens * 100).toFixed(0);
-      const colors = { 'claude-opus-4-6': '#00d4aa', 'claude-sonnet-4-6': '#4fa3e0', 'claude-haiku-4-5-20251001': '#d29921' };
-      const color = colors[m] || '#9b59b6';
-      const shortName = m.replace('claude-', '').replace(/-20\d+$/, '');
-      return `<div class="model-usage-row">
-        <span class="model-usage-name">${escapeHtml(shortName)}</span>
-        <div class="model-usage-bar-bg"><div class="model-usage-bar" style="width:${pct}%;background:${color}"></div></div>
-        <span class="model-usage-value">${formatTokens(u.outputTokens || 0)} out</span>
-      </div>`;
-    }).join('');
-    return `<div class="section">
-      <div class="section-title">Model Usage</div>
-      <div class="model-usage-table">${rows}</div>
-    </div>`;
-  })() : '';
+  const modelHtml = renderModelUsageSection(stats);
+  const hourHtml  = renderHourlyHeatmap(stats);
 
-  // ── Hourly Heatmap (compact) ──
-  const hourCounts = stats?.hourCounts || {};
-  const hasHours = Object.keys(hourCounts).length > 0;
-  const hourHtml = hasHours ? (() => {
-    const maxH = Math.max(...Object.values(hourCounts), 1);
-    let cells = '';
-    for (let h = 0; h < 24; h++) {
-      const count = hourCounts[String(h)] || 0;
-      const intensity = count / maxH;
-      const bg = count ? `rgba(0,212,170,${(intensity * 0.8 + 0.1).toFixed(2)})` : 'var(--bg-elevated)';
-      cells += `<div class="hour-cell" style="background:${bg}" title="${h}:00 — ${count} sessions">
-        <span class="hour-label">${h}</span>
-        ${count ? `<span class="hour-count">${count}</span>` : ''}
-      </div>`;
-    }
-    return `<div class="section">
-      <div class="section-title">Active Hours</div>
-      <div class="hour-grid">${cells}</div>
-    </div>`;
-  })() : '';
-
-  // ── Config Grid ──
   const configGrid = `<div class="section">
     <div class="section-title">Settings</div>
     <div class="config-grid">
@@ -999,7 +957,6 @@ function renderOverview() {
     </div>
   </div>`;
 
-  // ── CLAUDE.md ──
   const claudeMdHtml = g.claudeMd
     ? `<div class="section">
         <div class="claude-md-preview" onclick="toggleClaudeMdFull()">
@@ -1010,10 +967,8 @@ function renderOverview() {
           <div id="claude-md-full" class="markdown-body" style="display:none"></div>
           <div class="claude-md-toggle">▼ Expand full CLAUDE.md</div>
         </div>
-      </div>`
-    : '';
+      </div>` : '';
 
-  // ── Additional Directories ──
   const addDirs = s.permissions?.additionalDirectories || [];
   const addDirsHtml = addDirs.length
     ? `<div class="section">
@@ -1021,7 +976,6 @@ function renderOverview() {
         <div class="dir-list">${addDirs.map(d => `<div class="dir-item">${escapeHtml(d)}</div>`).join('')}</div>
       </div>` : '';
 
-  // ── Known Projects ──
   const visibleProjects = (g.projects || []).filter(p => p.verified).slice(0, 20);
   const projectsHtml = visibleProjects.length
     ? `<div class="section">
@@ -1039,40 +993,179 @@ function renderOverview() {
         </div>
       </div>` : '';
 
-  // ── Project section (when in project mode) ──
-  const projHtml = proj
-    ? `<div class="section">
-        <div class="section-title">Active Project: ${escapeHtml(proj.projectName)}</div>
-        <div class="config-grid">
-          <span class="config-key">Path</span><span class="config-value" style="font-family:var(--font-mono);font-size:11px">${escapeHtml(proj.path)}</span>
-          <span class="config-key">.claude/</span><span class="config-value">${proj.hasClaudeDir ? '✓ present' : '✗ not found'}</span>
-          ${proj.settingsLocal ? `<span class="config-key">Local perms</span><span class="config-value">${proj.settingsLocal.permissions?.allow?.length || 0} allow entries</span>` : ''}
-          ${proj.mcpJson ? `<span class="config-key">MCP servers</span><span class="config-value">${Object.keys(proj.mcpJson.mcpServers || {}).length}</span>` : ''}
-        </div>
-      </div>` : '';
-
-  // ── Two-column layout for chart + model/hours ──
   const hasSideStats = modelHtml || hourHtml;
-  const mainCol = chartHtml || '';
-  const sideCol = `${modelHtml}${hourHtml}`;
-
-  const statsLayout = (mainCol && hasSideStats)
+  const statsLayout = (chartHtml && hasSideStats)
     ? `<div class="dashboard-two-col">
-        <div class="dashboard-col-main">${mainCol}</div>
-        <div class="dashboard-col-side">${sideCol}</div>
+        <div class="dashboard-col-main">${chartHtml}</div>
+        <div class="dashboard-col-side">${modelHtml}${hourHtml}</div>
       </div>`
-    : `${mainCol}${sideCol}`;
+    : `${chartHtml}${modelHtml}${hourHtml}`;
 
   return `
     ${usageRow}
     ${configRow}
-    ${projHtml}
     ${statsLayout}
     ${configGrid}
     ${claudeMdHtml}
     ${addDirsHtml}
     ${projectsHtml}
   `;
+}
+
+function renderProjectOverview() {
+  const g    = State.scan.global;
+  const proj = State.scan.project;
+  const a    = State.analysis;
+  const ap   = a?.project;
+  const conn = a?.connections;
+
+  // Project-specific counts
+  const localSkills   = proj?.localSkills?.length   || conn?.local?.skills?.count   || 0;
+  const localCommands = proj?.localCommands?.length  || conn?.local?.commands?.count || 0;
+  const localPerms    = conn?.local?.settingsLocal?.permCount || proj?.settingsLocal?.permissions?.allow?.length || 0;
+  const mcpServers    = proj?.mcpJson ? Object.keys(proj.mcpJson.mcpServers || {}).length : 0;
+  const sessionCount  = ap?.sessionCount || 0;
+  const status        = ap?.status || 'none';
+
+  // Status label
+  const statusLabels = { full: 'Full Setup', partial: 'Partial', none: 'No .claude/', missing: 'Not Found' };
+
+  const metricsRow = `
+    <div class="dashboard-section-label">${escapeHtml(proj?.projectName || projectName(State.projectPath))}</div>
+    <div class="metrics-row">
+      ${renderMetricCard('Status', statusLabels[status] || status, '', status === 'full')}
+      ${renderMetricCard('Sessions', formatNum(sessionCount), 'conversations')}
+      ${renderMetricCard('Skills', localSkills, 'project-local')}
+      ${renderMetricCard('Commands', localCommands, 'project-local')}
+      ${renderMetricCard('Permissions', localPerms, 'local allow-list')}
+      ${renderMetricCard('MCP Servers', mcpServers, 'configured')}
+    </div>`;
+
+  // Project config grid
+  const configGrid = `<div class="section">
+    <div class="section-title">Project Configuration</div>
+    <div class="config-grid">
+      <span class="config-key">Path</span><span class="config-value" style="font-family:var(--font-mono);font-size:11px">${escapeHtml(proj?.path || State.projectPath)}</span>
+      <span class="config-key">.claude/ dir</span><span class="config-value">${ap?.hasClaudeDir || proj?.hasClaudeDir ? '✓ present' : '✗ absent'}</span>
+      <span class="config-key">CLAUDE.md</span><span class="config-value">${ap?.hasClaudeMd || proj?.claudeMd ? '✓ present' : '✗ absent'}</span>
+      <span class="config-key">settings.local</span><span class="config-value">${ap?.hasSettingsLocal || proj?.settingsLocal ? '✓ present' : '✗ absent'}</span>
+      <span class="config-key">.mcp.json</span><span class="config-value">${ap?.hasMcpJson || proj?.mcpJson ? '✓ present' : '✗ absent'}</span>
+      <span class="config-key">Registered</span><span class="config-value">${ap?.inAdditionalDirectories ? '✓ in additionalDirectories' : '✗ not registered'}</span>
+    </div>
+  </div>`;
+
+  // Project CLAUDE.md
+  const projClaudeMd = proj?.claudeMd;
+  const claudeMdHtml = projClaudeMd
+    ? `<div class="section">
+        <div class="claude-md-preview" onclick="toggleClaudeMdFull()">
+          <div class="section-title" style="margin-bottom:8px">CLAUDE.md — Project Instructions</div>
+          <div id="claude-md-excerpt" class="markdown-body" style="font-size:12px;padding-top:0">
+            ${projClaudeMd.excerpt ? escapeHtml(projClaudeMd.excerpt) : '<em>empty</em>'}
+          </div>
+          <div id="claude-md-full" class="markdown-body" style="display:none"></div>
+          <div class="claude-md-toggle">▼ Expand full CLAUDE.md</div>
+        </div>
+      </div>` : '';
+
+  // Warnings from analysis
+  const warnings = ap?.warnings || [];
+  const warningsHtml = warnings.length ? `<div class="section">
+    <div class="section-title">Warnings</div>
+    <div class="map-warnings">
+      ${warnings.map(w => `<div class="map-warning-item ${w.level}">
+        <span class="map-warning-icon">${w.level === 'error' ? '⛔' : w.level === 'warning' ? '⚠' : 'ℹ'}</span>
+        <span class="map-warning-msg">${escapeHtml(w.message)}</span>
+      </div>`).join('')}
+    </div>
+  </div>` : '';
+
+  // Local permissions summary
+  const localPermsData = conn?.local?.settingsLocal?.perms || proj?.settingsLocal?.permissions?.allowParsed || [];
+  const permsHtml = localPermsData.length ? `<div class="section">
+    <div class="section-title">Local Permissions (${localPermsData.length})</div>
+    <table class="data-table">
+      <thead><tr><th>Type</th><th>Tool</th><th>Argument</th></tr></thead>
+      <tbody>${localPermsData.slice(0, 10).map(p =>
+        `<tr><td>${typeBadge(p.type)}</td><td class="mono">${escapeHtml(p.tool)}</td><td class="mono">${p.arg ? escapeHtml(p.arg) : '<span style="color:var(--text-muted)">—</span>'}</td></tr>`
+      ).join('')}${localPermsData.length > 10 ? `<tr><td colspan="3" style="color:var(--text-muted);font-style:italic">… and ${localPermsData.length - 10} more (see Settings tab)</td></tr>` : ''}</tbody>
+    </table>
+  </div>` : '';
+
+  // MCP servers
+  const mcpData = proj?.mcpJson;
+  const mcpHtml = mcpData ? `<div class="section">
+    <div class="section-title">MCP Servers</div>
+    ${renderMcpServers(mcpData)}
+  </div>` : '';
+
+  // Inherited from global
+  const gs = g.settings || {};
+  const globalHooksCount = Object.values(gs.hooks || {}).reduce((a, arr) => a + arr.length, 0);
+  const inheritedHtml = `<div class="section">
+    <div class="section-title">Inherited from Global</div>
+    <div class="metrics-row">
+      ${renderMetricCard('Commands', g.commands?.length || 0, 'global')}
+      ${renderMetricCard('Skills', g.skills?.length || 0, 'global')}
+      ${renderMetricCard('Permissions', gs.permissions?.allow?.length || 0, 'global allow-list')}
+      ${renderMetricCard('Hooks', globalHooksCount, 'global')}
+    </div>
+  </div>`;
+
+  return `
+    ${metricsRow}
+    ${warningsHtml}
+    ${configGrid}
+    ${claudeMdHtml}
+    ${permsHtml}
+    ${mcpHtml}
+    ${inheritedHtml}
+  `;
+}
+
+// ── Shared stat helpers ──
+function renderModelUsageSection(stats) {
+  const modelUsage = stats?.modelUsage || {};
+  const modelNames = Object.keys(modelUsage);
+  if (!modelNames.length) return '';
+  const maxTokens = Math.max(...modelNames.map(m => (modelUsage[m].outputTokens || 0) + (modelUsage[m].inputTokens || 0)), 1);
+  const rows = modelNames.map(m => {
+    const u = modelUsage[m];
+    const total = (u.inputTokens || 0) + (u.outputTokens || 0);
+    const pct = (total / maxTokens * 100).toFixed(0);
+    const colors = { 'claude-opus-4-6': '#00d4aa', 'claude-sonnet-4-6': '#4fa3e0', 'claude-haiku-4-5-20251001': '#d29921' };
+    const color = colors[m] || '#9b59b6';
+    const shortName = m.replace('claude-', '').replace(/-20\d+$/, '');
+    return `<div class="model-usage-row">
+      <span class="model-usage-name">${escapeHtml(shortName)}</span>
+      <div class="model-usage-bar-bg"><div class="model-usage-bar" style="width:${pct}%;background:${color}"></div></div>
+      <span class="model-usage-value">${formatTokens(u.outputTokens || 0)} out</span>
+    </div>`;
+  }).join('');
+  return `<div class="section">
+    <div class="section-title">Model Usage</div>
+    <div class="model-usage-table">${rows}</div>
+  </div>`;
+}
+
+function renderHourlyHeatmap(stats) {
+  const hourCounts = stats?.hourCounts || {};
+  if (!Object.keys(hourCounts).length) return '';
+  const maxH = Math.max(...Object.values(hourCounts), 1);
+  let cells = '';
+  for (let h = 0; h < 24; h++) {
+    const count = hourCounts[String(h)] || 0;
+    const intensity = count / maxH;
+    const bg = count ? `rgba(0,212,170,${(intensity * 0.8 + 0.1).toFixed(2)})` : 'var(--bg-elevated)';
+    cells += `<div class="hour-cell" style="background:${bg}" title="${h}:00 — ${count} sessions">
+      <span class="hour-label">${h}</span>
+      ${count ? `<span class="hour-count">${count}</span>` : ''}
+    </div>`;
+  }
+  return `<div class="section">
+    <div class="section-title">Active Hours</div>
+    <div class="hour-grid">${cells}</div>
+  </div>`;
 }
 
 function toggleClaudeMdFull() {
