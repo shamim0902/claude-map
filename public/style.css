@@ -119,6 +119,7 @@ body {
   flex-shrink: 0;
 }
 .brand-icon  { font-size: 18px; color: var(--accent-teal); }
+.brand-logo  { width: 24px; height: 24px; border-radius: 4px; object-fit: contain; }
 .brand-title { font-size: 15px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.3px; }
 .brand-actions { margin-left: auto; display: flex; gap: 4px; }
 .btn-theme-toggle {

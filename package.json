@@ -1,11 +1,44 @@
 {
   "name": "claude-map",
   "version": "3.0.0",
-  "description": "Visual connection map for Claude Code project configurations",
+  "description": "Visual dashboard for inspecting and mapping Claude Code project configurations",
   "main": "server.js",
+  "bin": {
+    "claude-map": "bin/cli.js"
+  },
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js"
+  },
+  "files": [
+    "bin/",
+    "public/",
+    "server.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "claude",
+    "claude-code",
+    "claude-map",
+    "anthropic",
+    "ai",
+    "dashboard",
+    "inspector",
+    "configuration",
+    "skills",
+    "commands",
+    "mcp"
+  ],
+  "author": "hasanuzzamanbe",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/shamim0902/claude-map.git"
+  },
+  "homepage": "https://github.com/shamim0902/claude-map#readme",
+  "bugs": {
+    "url": "https://github.com/shamim0902/claude-map/issues"
   },
   "dependencies": {
     "chokidar": "^3.6.0",
