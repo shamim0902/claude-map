@@ -44,6 +44,7 @@ Default port: **3131** (override with `PORT` env var).
 | GET | `/api/sessions/:id` | Full conversation timeline for a session. `?project=<path>` |
 | GET | `/api/history` | Command history from `~/.claude/history.jsonl`. Optional `?project=<path>&limit=200` |
 | GET | `/api/stats/tools` | Tool usage frequency by scanning session JSONL files. `?project=<path>&days=30` |
+| GET | `/api/stats/costs` | Token usage grouped by day and model for cost estimation. `?project=<path>` |
 | GET | `/api/skills/export` | Download a single skill as `.md`. `?name=<name>&scope=global\|project&project=<path>` |
 | POST | `/api/skills/import` | Import a skill. Body: `{ name, content, scope, projectPath }` |
 | POST | `/api/export/bundle` | Export bundle of skills+commands+CLAUDE.md. Body: `{ items, scope, projectPath }` |
@@ -110,7 +111,12 @@ Stored in `~/.claude/inspector-projects.json` (backward-compatible filename from
 - Frontend functions are global (no module system) — all attached to window scope
 - `renderExpandableCard()` is the shared component for command/plan cards
 - `renderSkillCard()` is the enhanced skill card component with metadata badges, allowed-tools, export button
-- `renderSessions()` / `renderSessionDetail()` / `renderCommandHistory()` — Sessions tab with conversation timeline
+- `renderSessions()` / `renderSessionDetail()` / `renderCommandHistory()` / `renderCostReport()` — Sessions tab with conversation timeline and cost tracking
+- Sessions tab has three sub-views toggled by a pill: **Sessions**, **Command History**, **Cost Report**
+- Session list cards show a cost badge computed client-side from `tokenUsage` returned by `/api/sessions`
+- Session detail shows a 5-card summary (turns, estimated cost, input tokens, output tokens, cache savings) plus a per-model cost breakdown table
+- Cost Report shows summary cards, a daily cost canvas chart (`drawCostChart()`), per-model bar chart, and top 10 most expensive sessions
+- `MODEL_PRICING` constant + `calculateCost(tokens, model)` + `formatCost(n)` + `getPricing(model)` — client-side pricing engine (keeps pricing out of server so it can be updated without restart)
 - `renderToolBreakdown()` — horizontal bar chart for tool usage
 - Import/export modals: `openImportModal()`, `confirmImport()`, `openBundleModal()`, `confirmBundleExport()`
 - Expandable cards use `data-raw` attribute + lazy markdown rendering on first open
