@@ -327,7 +327,7 @@ function renderTabContent() {
 
   el.innerHTML = (renderers[State.currentTab] || renderEmpty)();
 
-  if (State.currentTab === 'stats') {
+  if (State.currentTab === 'stats' || State.currentTab === 'overview') {
     requestAnimationFrame(() => initStatsChart());
   }
   attachCopyButtons();
@@ -876,59 +876,149 @@ function renderOverview() {
   const g = State.scan.global;
   const proj = State.scan.project;
   const s = g.settings || {};
+  const stats = g.stats;
   const perms = s.permissions?.allow?.length || 0;
   const plugins = Object.values(s.enabledPlugins || {}).filter(Boolean).length;
   const projects = g.projects?.length || 0;
-
-  const metricCards = [
-    renderMetricCard('Commands', g.commands?.length || 0, 'slash commands', true),
-    renderMetricCard('Skills', g.skills?.length || 0, 'in skills/'),
-    renderMetricCard('Plans', g.plans?.length || 0, 'plan files'),
-    renderMetricCard('Permissions', perms, 'allow-list entries'),
-    renderMetricCard('Plugins', plugins, 'enabled'),
-    renderMetricCard('Projects', projects, 'known paths'),
-  ];
-
-  const claudeMdHtml = g.claudeMd
-    ? `<div class="claude-md-preview" onclick="toggleClaudeMdFull()">
-        <div class="section-title" style="margin-bottom:8px">CLAUDE.md</div>
-        <div id="claude-md-excerpt" class="markdown-body" style="font-size:12px;padding-top:0">
-          ${g.claudeMd.excerpt ? escapeHtml(g.claudeMd.excerpt) : '<em>empty</em>'}
-        </div>
-        <div id="claude-md-full" class="markdown-body" style="display:none"></div>
-        <div class="claude-md-toggle">▼ Expand full CLAUDE.md</div>
-      </div>`
-    : `<div class="empty-state" style="min-height:80px"><p>No CLAUDE.md found</p></div>`;
-
   const hooksCount = Object.values(s.hooks || {}).reduce((a, arr) => a + arr.length, 0);
-  const configHtml = `<div class="config-grid">
-    <span class="config-key">Model</span><span class="config-value">${escapeHtml(s.model || '—')}</span>
-    <span class="config-key">Effort</span><span class="config-value">${escapeHtml(s.effortLevel || '—')}</span>
-    <span class="config-key">Hooks</span><span class="config-value">${hooksCount} hook${hooksCount !== 1 ? 's' : ''} configured</span>
-    <span class="config-key">Plugins</span><span class="config-value">${Object.keys(s.enabledPlugins || {}).join(', ') || '—'}</span>
-    <span class="config-key">Last scan</span><span class="config-value">${timeSince(State.scan.meta?.scannedAt)}</span>
+
+  // ── Usage Stats Row (from stats-cache) ──
+  const daily = stats?.dailyActivity || [];
+  const totalMsgs     = daily.reduce((acc, d) => acc + d.messageCount, 0);
+  const totalSessions = stats?.totalSessions || daily.reduce((acc, d) => acc + d.sessionCount, 0);
+  const totalTools    = daily.reduce((acc, d) => acc + d.toolCallCount, 0);
+  const activeDays    = daily.length;
+
+  const usageRow = stats ? `
+    <div class="dashboard-section-label">Usage</div>
+    <div class="metrics-row">
+      ${renderMetricCard('Messages', formatNum(totalMsgs), 'all time', true)}
+      ${renderMetricCard('Sessions', formatNum(totalSessions), 'all time')}
+      ${renderMetricCard('Tool Calls', formatNum(totalTools), 'all time')}
+      ${renderMetricCard('Active Days', activeDays, 'with activity')}
+    </div>` : '';
+
+  // ── Config Metrics Row ──
+  const configRow = `
+    <div class="dashboard-section-label">Configuration</div>
+    <div class="metrics-row">
+      ${renderMetricCard('Commands', g.commands?.length || 0, 'slash commands')}
+      ${renderMetricCard('Skills', g.skills?.length || 0, 'in skills/')}
+      ${renderMetricCard('Permissions', perms, 'allow-list')}
+      ${renderMetricCard('Hooks', hooksCount, 'configured')}
+      ${renderMetricCard('Plugins', plugins, 'enabled')}
+      ${renderMetricCard('Projects', projects, 'known')}
+    </div>`;
+
+  // ── Activity Chart (mini) ──
+  const chartHtml = daily.length ? `
+    <div class="section">
+      <div class="section-title">Activity — last ${Math.min(daily.length, 30)} days</div>
+      <canvas id="stats-chart" height="200"></canvas>
+      <div class="chart-legend">
+        <div class="legend-item"><span class="legend-dot" style="background:#00d4aa"></span>Messages</div>
+        <div class="legend-item"><span class="legend-dot" style="background:#9b59b6"></span>Tool Calls</div>
+      </div>
+    </div>` : '';
+
+  // ── Model Usage (compact) ──
+  const modelUsage = stats?.modelUsage || {};
+  const modelNames = Object.keys(modelUsage);
+  const modelHtml = modelNames.length ? (() => {
+    const maxTokens = Math.max(...modelNames.map(m => (modelUsage[m].outputTokens || 0) + (modelUsage[m].inputTokens || 0)), 1);
+    const rows = modelNames.map(m => {
+      const u = modelUsage[m];
+      const total = (u.inputTokens || 0) + (u.outputTokens || 0);
+      const pct = (total / maxTokens * 100).toFixed(0);
+      const colors = { 'claude-opus-4-6': '#00d4aa', 'claude-sonnet-4-6': '#4fa3e0', 'claude-haiku-4-5-20251001': '#d29921' };
+      const color = colors[m] || '#9b59b6';
+      const shortName = m.replace('claude-', '').replace(/-20\d+$/, '');
+      return `<div class="model-usage-row">
+        <span class="model-usage-name">${escapeHtml(shortName)}</span>
+        <div class="model-usage-bar-bg"><div class="model-usage-bar" style="width:${pct}%;background:${color}"></div></div>
+        <span class="model-usage-value">${formatTokens(u.outputTokens || 0)} out</span>
+      </div>`;
+    }).join('');
+    return `<div class="section">
+      <div class="section-title">Model Usage</div>
+      <div class="model-usage-table">${rows}</div>
+    </div>`;
+  })() : '';
+
+  // ── Hourly Heatmap (compact) ──
+  const hourCounts = stats?.hourCounts || {};
+  const hasHours = Object.keys(hourCounts).length > 0;
+  const hourHtml = hasHours ? (() => {
+    const maxH = Math.max(...Object.values(hourCounts), 1);
+    let cells = '';
+    for (let h = 0; h < 24; h++) {
+      const count = hourCounts[String(h)] || 0;
+      const intensity = count / maxH;
+      const bg = count ? `rgba(0,212,170,${(intensity * 0.8 + 0.1).toFixed(2)})` : 'var(--bg-elevated)';
+      cells += `<div class="hour-cell" style="background:${bg}" title="${h}:00 — ${count} sessions">
+        <span class="hour-label">${h}</span>
+        ${count ? `<span class="hour-count">${count}</span>` : ''}
+      </div>`;
+    }
+    return `<div class="section">
+      <div class="section-title">Active Hours</div>
+      <div class="hour-grid">${cells}</div>
+    </div>`;
+  })() : '';
+
+  // ── Config Grid ──
+  const configGrid = `<div class="section">
+    <div class="section-title">Settings</div>
+    <div class="config-grid">
+      <span class="config-key">Model</span><span class="config-value">${escapeHtml(s.model || '—')}</span>
+      <span class="config-key">Effort</span><span class="config-value">${escapeHtml(s.effortLevel || '—')}</span>
+      <span class="config-key">Plugins</span><span class="config-value">${Object.keys(s.enabledPlugins || {}).join(', ') || '—'}</span>
+      ${stats?.firstSessionDate ? `<span class="config-key">First session</span><span class="config-value">${formatDate(stats.firstSessionDate)}</span>` : ''}
+      <span class="config-key">Last scan</span><span class="config-value">${timeSince(State.scan.meta?.scannedAt)}</span>
+    </div>
   </div>`;
 
+  // ── CLAUDE.md ──
+  const claudeMdHtml = g.claudeMd
+    ? `<div class="section">
+        <div class="claude-md-preview" onclick="toggleClaudeMdFull()">
+          <div class="section-title" style="margin-bottom:8px">CLAUDE.md — Global Instructions</div>
+          <div id="claude-md-excerpt" class="markdown-body" style="font-size:12px;padding-top:0">
+            ${g.claudeMd.excerpt ? escapeHtml(g.claudeMd.excerpt) : '<em>empty</em>'}
+          </div>
+          <div id="claude-md-full" class="markdown-body" style="display:none"></div>
+          <div class="claude-md-toggle">▼ Expand full CLAUDE.md</div>
+        </div>
+      </div>`
+    : '';
+
+  // ── Additional Directories ──
   const addDirs = s.permissions?.additionalDirectories || [];
   const addDirsHtml = addDirs.length
-    ? `<div class="dir-list">${addDirs.map(d => `<div class="dir-item">${escapeHtml(d)}</div>`).join('')}</div>`
-    : `<p style="font-size:12px;color:var(--text-muted)">None configured</p>`;
+    ? `<div class="section">
+        <div class="section-title">Additional Directories (${addDirs.length})</div>
+        <div class="dir-list">${addDirs.map(d => `<div class="dir-item">${escapeHtml(d)}</div>`).join('')}</div>
+      </div>` : '';
 
+  // ── Known Projects ──
   const visibleProjects = (g.projects || []).filter(p => p.verified).slice(0, 20);
   const projectsHtml = visibleProjects.length
-    ? `<div class="project-list-grid">
-        ${visibleProjects.map(p => `
-          <div class="project-card" onclick="selectProject('${escapeAttr(p.decodedPath)}')">
-            <div class="project-card-path">${escapeHtml(p.decodedPath)}</div>
-            <div class="project-card-meta">
-              <span class="${p.verified ? 'dot-verified' : 'dot-unverified'}">● ${p.verified ? 'verified' : 'not found'}</span>
-              ${p.hasLocalClaude ? '<span>has .claude/</span>' : ''}
-              ${p.sessionCount ? `<span>${p.sessionCount} session${p.sessionCount > 1 ? 's' : ''}</span>` : ''}
-            </div>
-          </div>`).join('')}
-      </div>`
-    : `<p style="font-size:12px;color:var(--text-muted)">No verified project paths found</p>`;
+    ? `<div class="section">
+        <div class="section-title">Known Projects (${visibleProjects.length})</div>
+        <div class="project-list-grid">
+          ${visibleProjects.map(p => `
+            <div class="project-card" onclick="selectProject('${escapeAttr(p.decodedPath)}')">
+              <div class="project-card-path">${escapeHtml(p.decodedPath)}</div>
+              <div class="project-card-meta">
+                <span class="${p.verified ? 'dot-verified' : 'dot-unverified'}">● ${p.verified ? 'verified' : 'not found'}</span>
+                ${p.hasLocalClaude ? '<span>has .claude/</span>' : ''}
+                ${p.sessionCount ? `<span>${p.sessionCount} session${p.sessionCount > 1 ? 's' : ''}</span>` : ''}
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>` : '';
 
+  // ── Project section (when in project mode) ──
   const projHtml = proj
     ? `<div class="section">
         <div class="section-title">Active Project: ${escapeHtml(proj.projectName)}</div>
@@ -940,25 +1030,27 @@ function renderOverview() {
         </div>
       </div>` : '';
 
+  // ── Two-column layout for chart + model/hours ──
+  const hasSideStats = modelHtml || hourHtml;
+  const mainCol = chartHtml || '';
+  const sideCol = `${modelHtml}${hourHtml}`;
+
+  const statsLayout = (mainCol && hasSideStats)
+    ? `<div class="dashboard-two-col">
+        <div class="dashboard-col-main">${mainCol}</div>
+        <div class="dashboard-col-side">${sideCol}</div>
+      </div>`
+    : `${mainCol}${sideCol}`;
+
   return `
-    <div class="metrics-row">${metricCards.join('')}</div>
+    ${usageRow}
+    ${configRow}
     ${projHtml}
-    <div class="section">
-      <div class="section-title">Configuration</div>
-      ${configHtml}
-    </div>
-    <div class="section">
-      <div class="section-title">CLAUDE.md — Global Instructions</div>
-      ${claudeMdHtml}
-    </div>
-    <div class="section">
-      <div class="section-title">Additional Directories (${addDirs.length})</div>
-      ${addDirsHtml}
-    </div>
-    <div class="section">
-      <div class="section-title">Known Projects (${visibleProjects.length})</div>
-      ${projectsHtml}
-    </div>
+    ${statsLayout}
+    ${configGrid}
+    ${claudeMdHtml}
+    ${addDirsHtml}
+    ${projectsHtml}
   `;
 }
 
@@ -1502,9 +1594,9 @@ function initStatsChart() {
 function drawStatsChart(canvas, daily) {
   const ctx = canvas.getContext('2d');
   const W   = canvas.offsetWidth || 600;
+  const H   = parseInt(canvas.getAttribute('height')) || 280;
   canvas.width  = W;
-  canvas.height = 280;
-  const H   = 280;
+  canvas.height = H;
   const PAD = { top: 20, right: 20, bottom: 40, left: 56 };
   const cW  = W - PAD.left - PAD.right;
   const cH  = H - PAD.top  - PAD.bottom;

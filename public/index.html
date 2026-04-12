@@ -14,12 +14,11 @@
 
     <!-- ── Sidebar ─────────────────────────────────────────── -->
     <aside class="sidebar">
-      <div class="sidebar-brand">
+      <div class="sidebar-brand" onclick="selectGlobal()" style="cursor:pointer" title="Go to Global Dashboard">
         <img src="/logo.png" alt="Claude Map" class="brand-logo">
-        <span class="brand-title">Claude Map</span>
         <div class="brand-actions">
           <button class="btn-theme-toggle" id="theme-toggle"
-                  onclick="toggleTheme()" title="Switch to light mode">◑</button>
+                  onclick="event.stopPropagation();toggleTheme()" title="Switch to light mode">◑</button>
         </div>
       </div>
 

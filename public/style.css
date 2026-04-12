@@ -119,7 +119,7 @@ body {
   flex-shrink: 0;
 }
 .brand-icon  { font-size: 18px; color: var(--accent-teal); }
-.brand-logo  { width: 24px; height: 24px; border-radius: 4px; object-fit: contain; }
+.brand-logo  { height: 28px; width: auto; object-fit: contain; border-radius: 3px; }
 .brand-title { font-size: 15px; font-weight: 700; color: var(--text-primary); letter-spacing: -0.3px; }
 .brand-actions { margin-left: auto; display: flex; gap: 4px; }
 .btn-theme-toggle {
@@ -540,6 +540,16 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .browser-selected-path { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-hidden-toggle { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
 .browser-hidden-toggle input { cursor: pointer; accent-color: var(--accent-teal); }
+
+/* ── Dashboard Layout ────────────────────────────────────── */
+.dashboard-section-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin: 16px 0 6px; }
+.dashboard-section-label:first-child { margin-top: 0; }
+.dashboard-two-col { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; margin-top: 4px; }
+.dashboard-col-main { min-width: 0; }
+.dashboard-col-side { min-width: 0; display: flex; flex-direction: column; gap: 0; }
+@media (max-width: 900px) {
+  .dashboard-two-col { grid-template-columns: 1fr; }
+}
 
 /* ── Skill Cards (enhanced) ──────────────────────────────── */
 .skill-card { background: var(--bg-elevated); border: 1px solid var(--bg-border); border-radius: var(--radius-md); padding: 12px 14px; transition: var(--transition-theme); }
