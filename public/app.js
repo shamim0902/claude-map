@@ -200,6 +200,17 @@ function toggleTheme() {
   applyTheme(State.theme === 'dark' ? 'light' : 'dark');
 }
 
+// ─── Mobile Sidebar ───────────────────────────────────────────
+function toggleMobileSidebar() {
+  document.querySelector('.sidebar')?.classList.toggle('open');
+  document.getElementById('sidebar-backdrop')?.classList.toggle('visible');
+}
+
+function closeMobileSidebar() {
+  document.querySelector('.sidebar')?.classList.remove('open');
+  document.getElementById('sidebar-backdrop')?.classList.remove('visible');
+}
+
 // ─── Navigation ───────────────────────────────────────────────
 function selectGlobal() {
   State.mode        = 'global';
@@ -208,6 +219,7 @@ function selectGlobal() {
   State.analysis    = null;
   State.activeNodeId = null;
 
+  closeMobileSidebar();
   if (!State.scan) {
     loadGlobal();
   } else {
@@ -234,6 +246,7 @@ async function loadGlobal() {
 }
 
 async function selectProject(path) {
+  closeMobileSidebar();
   State.mode        = 'project';
   State.projectPath = path;
   State.currentTab  = 'map';
@@ -509,6 +522,14 @@ async function loadPinnedProjects() {
     State.pinnedProjects = data.projects || [];
   } catch { State.pinnedProjects = []; }
   renderProjectList();
+}
+
+function addPastedPath() {
+  const input = document.getElementById('paste-path-input');
+  const val = input?.value?.trim();
+  if (!val) return;
+  addPinnedProject(val);
+  input.value = '';
 }
 
 async function addPinnedProject(path) {

@@ -25,7 +25,13 @@
       <div class="sidebar-section projects-panel">
         <div class="sidebar-label-row">
           <label class="sidebar-label">Projects</label>
-          <button class="btn-add-project" onclick="openAddProjectBrowser()" title="Add project">+</button>
+          <button class="btn-add-project" onclick="openAddProjectBrowser()" title="Browse for project">+</button>
+        </div>
+        <div class="sidebar-path-input-row">
+          <input id="paste-path-input" class="paste-path-input" type="text"
+                 placeholder="Paste project path…"
+                 onkeydown="if(event.key==='Enter')addPastedPath()">
+          <button class="btn-paste-add" onclick="addPastedPath()" title="Add path">→</button>
         </div>
         <div id="projects-list" class="sidebar-projects">
           <span class="sidebar-hint">Loading…</span>
@@ -45,8 +51,18 @@
       </div>
     </aside>
 
+    <!-- ── Mobile sidebar backdrop ─────────────────────────── -->
+    <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="closeMobileSidebar()"></div>
+
     <!-- ── Main area ────────────────────────────────────────── -->
     <main class="main-area">
+      <div class="mobile-header">
+        <button class="mobile-menu-btn" onclick="toggleMobileSidebar()">☰</button>
+        <img src="/logo.png" alt="Claude Map" class="brand-logo" onclick="selectGlobal()" style="cursor:pointer">
+        <div style="margin-left:auto">
+          <button class="btn-theme-toggle" onclick="toggleTheme()" title="Toggle theme">◑</button>
+        </div>
+      </div>
       <nav id="tab-bar" class="tab-bar"></nav>
       <div id="tab-content" class="tab-content"></div>
     </main>
