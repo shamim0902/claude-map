@@ -55,7 +55,7 @@
     <div id="sidebar-backdrop" class="sidebar-backdrop" onclick="closeMobileSidebar()"></div>
 
     <!-- ── Main area ────────────────────────────────────────── -->
-    <main class="main-area">
+    <main class="main-area" id="main-area">
       <div class="mobile-header">
         <button class="mobile-menu-btn" onclick="toggleMobileSidebar()">☰</button>
         <img src="/logo.png" alt="Claude Map" class="brand-logo" onclick="selectGlobal()" style="cursor:pointer">
@@ -64,7 +64,30 @@
         </div>
       </div>
       <nav id="tab-bar" class="tab-bar"></nav>
-      <div id="tab-content" class="tab-content"></div>
+
+      <!-- Positioning context for tray + panel -->
+      <div class="content-with-terminal" id="content-with-terminal">
+        <div id="tab-content" class="tab-content"></div>
+
+        <!-- Terminal panel — absolutely positioned above the tray -->
+        <div id="terminal-panel" class="terminal-panel hidden">
+          <div class="terminal-resize-handle" id="terminal-resize-handle"></div>
+          <div class="terminal-panel-header">
+            <span id="terminal-cwd" class="terminal-cwd"></span>
+            <div style="margin-left:auto;display:flex;gap:4px;align-items:center">
+              <button class="btn-ghost" onclick="minimizeTerminal()" title="Minimize" style="padding:2px 6px;font-size:13px">−</button>
+              <button class="btn-ghost" onclick="closeActiveTerminalTab()" title="Close tab" style="padding:2px 6px;font-size:13px">✕</button>
+            </div>
+          </div>
+          <div id="terminal-container" class="terminal-container"></div>
+        </div>
+
+        <!-- Tray strip — absolutely pinned to bottom of content area -->
+        <div id="terminal-tray" class="terminal-tray">
+          <div id="terminal-tray-tabs" class="terminal-tray-tabs"></div>
+          <button class="terminal-tray-add" onclick="trayNewTerminal()" title="New terminal (Ctrl+`)">+</button>
+        </div>
+      </div>
     </main>
 
   </div>
@@ -130,6 +153,31 @@
     </div>
   </div>
 
+  <!-- ── Share Modal ───────────────────────────────────────── -->
+  <div id="share-overlay" class="modal-overlay hidden" onclick="closeShareModal()">
+    <div class="modal-box" onclick="event.stopPropagation()">
+      <div class="modal-header">
+        <span class="modal-title">Share to Project</span>
+        <button class="modal-close" onclick="closeShareModal()">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="share-modal-section-label">Selected items</div>
+        <div id="share-item-preview" class="share-item-preview"></div>
+        <div class="share-modal-section-label" style="margin-top:14px">Copy to project</div>
+        <select id="share-target-select" class="import-scope-select" style="width:100%;margin-top:4px" onchange="onShareTargetChange()">
+          <option value="">— pick a project —</option>
+        </select>
+        <div id="share-result" style="margin-top:10px;font-size:12px;min-height:18px"></div>
+      </div>
+      <div class="modal-footer">
+        <div class="modal-actions">
+          <button class="btn-secondary" onclick="closeShareModal()">Cancel</button>
+          <button class="btn-primary" id="share-confirm-btn" onclick="confirmShare()" disabled>Copy to Project</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ── Bundle Export Modal ─────────────────────────────── -->
   <div id="bundle-overlay" class="modal-overlay hidden" onclick="closeBundleModal()">
     <div class="modal-box" onclick="event.stopPropagation()">
@@ -162,6 +210,11 @@
   </div>
 
   <!-- ── Scripts ──────────────────────────────────────────── -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-web-links@0.9.0/lib/addon-web-links.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs/loader.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/core.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/javascript.min.js"></script>
