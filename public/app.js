@@ -348,6 +348,7 @@ function selectGlobal() {
   _leaveEditorTab();
 
   closeMobileSidebar();
+  updateUrl();
   if (!State.scan) {
     loadGlobal();
   } else {
@@ -427,8 +428,107 @@ function navigate(tab) {
   }
   State.currentTab = tab;
   State.activeNodeId = null;
+  updateUrl();
   renderApp();
 }
+
+// ─── URL Routing ──────────────────────────────────────────────
+let _suppressUrlUpdate = false;
+
+// Slug helpers — store slug→fullPath in localStorage so short names survive page reload
+function getProjectSlug(fullPath) {
+  return fullPath.split('/').filter(Boolean).pop() || 'project';
+}
+
+function saveProjectSlug(fullPath) {
+  try {
+    const map = JSON.parse(localStorage.getItem('claude-map-slugs') || '{}');
+    map[getProjectSlug(fullPath)] = fullPath;
+    localStorage.setItem('claude-map-slugs', JSON.stringify(map));
+  } catch {}
+}
+
+function resolveProjectSlug(slug) {
+  // 1. localStorage slug map (fastest, survives reload)
+  try {
+    const map = JSON.parse(localStorage.getItem('claude-map-slugs') || '{}');
+    if (map[slug]) return map[slug];
+  } catch {}
+  // 2. search pinned + scanned projects by folder name
+  const all = [
+    ...(State.pinnedProjects || []),
+    ...(State.scan?.global?.projects?.map(p => p.decodedPath).filter(Boolean) || []),
+  ];
+  return all.find(p => getProjectSlug(p) === slug) || null;
+}
+
+function buildUrl() {
+  const params = new URLSearchParams();
+  if (State.mode === 'project' && State.projectPath) {
+    params.set('project', getProjectSlug(State.projectPath));
+  }
+  if (State.currentTab && State.currentTab !== 'overview') {
+    params.set('tab', State.currentTab);
+  }
+  const qs = params.toString();
+  return qs ? `/?${qs}` : '/';
+}
+
+function updateUrl(replace = false) {
+  if (_suppressUrlUpdate) return;
+  const url = buildUrl();
+  if (replace) {
+    history.replaceState(null, '', url);
+  } else {
+    history.pushState(null, '', url);
+  }
+}
+
+window.addEventListener('popstate', () => {
+  _suppressUrlUpdate = true;
+  const params = new URLSearchParams(location.search);
+  const slug   = params.get('project');
+  const tab    = params.get('tab');
+
+  if (slug) {
+    const fullPath = resolveProjectSlug(slug);
+    if (fullPath && State.mode === 'project' && State.projectPath === fullPath) {
+      // Same project — instant tab switch
+      const t = (tab && TABS_PROJECT.includes(tab)) ? tab : 'map';
+      State.currentTab = t;
+      State.activeNodeId = null;
+      _suppressUrlUpdate = false;
+      renderApp();
+    } else if (fullPath) {
+      selectProject(fullPath).then(() => {
+        if (tab && TABS_PROJECT.includes(tab)) {
+          State.currentTab = tab;
+          renderApp();
+        }
+        _suppressUrlUpdate = false;
+      });
+    } else {
+      // Slug not resolvable — fall back to global
+      selectGlobal();
+      _suppressUrlUpdate = false;
+    }
+  } else {
+    if (State.mode === 'global') {
+      const t = (tab && TABS_GLOBAL.includes(tab)) ? tab : 'overview';
+      State.currentTab = t;
+      State.activeNodeId = null;
+      _suppressUrlUpdate = false;
+      renderApp();
+    } else {
+      selectGlobal();
+      if (tab && TABS_GLOBAL.includes(tab)) {
+        State.currentTab = tab;
+        renderApp();
+      }
+      _suppressUrlUpdate = false;
+    }
+  }
+});
 
 // ─── Render Pipeline ──────────────────────────────────────────
 function renderApp() {
@@ -1386,15 +1486,29 @@ function renderCommands() {
   const filteredLocal  = localCommands.filter(filterCmd);
 
   const localSection = isProject && localCommands.length ? `
-    <div class="section-title" style="margin:16px 0 8px">Project-local Commands</div>
+    <div class="section-row">
+      <div class="section-title">Project-local Commands</div>
+      <button class="btn-icon cmd-share-all-btn" onclick="shareCommandSet('local', this)" title="Copy all project commands as shareable JSON">
+        ↓ .zip (${localCommands.length})
+      </button>
+    </div>
     <div class="cards-grid">
       ${filteredLocal.length
         ? filteredLocal.map(c => renderCommandCard(c, 'lcmd_', 'project')).join('')
         : `<div class="empty-state" style="min-height:80px"><p>No local commands match "<strong>${escapeHtml(q)}</strong>"</p></div>`}
     </div>` : '';
 
+  const globalSectionLabel = isProject && localCommands.length
+    ? `<div class="section-row">
+        <div class="section-title">Global Commands</div>
+        <button class="btn-icon cmd-share-all-btn" onclick="shareCommandSet('global', this)" title="Copy all global commands as shareable JSON">
+          ↓ .zip (${globalCommands.length})
+        </button>
+      </div>`
+    : '';
+
   const globalSection = `
-    ${isProject && localCommands.length ? `<div class="section-title" style="margin:16px 0 8px">Global Commands</div>` : ''}
+    ${globalSectionLabel}
     <div class="cards-grid">
       ${filteredGlobal.length
         ? filteredGlobal.map(c => renderCommandCard(c, 'cmd_', 'global')).join('')
@@ -1402,6 +1516,10 @@ function renderCommands() {
           ? `<div class="empty-state" style="min-height:80px"><p>No global commands match "<strong>${escapeHtml(q)}</strong>"</p></div>`
           : `<div class="empty-state" style="min-height:80px"><p>No global commands</p></div>`}
     </div>`;
+
+  const shareAllBtn = !isProject && globalCommands.length
+    ? `<button class="btn-icon cmd-share-all-btn" onclick="shareCommandSet('global', this)" title="Download all commands as .zip">↓ .zip</button>`
+    : '';
 
   return `<div>
     <div class="tab-header">
@@ -3943,13 +4061,67 @@ function handleImportDrop(event) {
   event.preventDefault();
   event.currentTarget.classList.remove('dragover');
   const file = event.dataTransfer?.files?.[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    document.getElementById('import-textarea').value = reader.result;
-    previewImport();
-  };
-  reader.readAsText(file);
+  if (file) loadImportFile(file);
+}
+
+function handleImportFileSelect(event) {
+  const file = event.target.files?.[0];
+  if (file) loadImportFile(file);
+  event.target.value = ''; // reset so same file can be re-selected
+}
+
+async function loadImportFile(file) {
+  const dropZone = document.getElementById('import-drop-zone');
+  const label = dropZone?.querySelector('.import-drop-label');
+  if (label) label.textContent = file.name;
+
+  if (file.name.endsWith('.zip')) {
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const commands = [];
+      const skills = [];
+      let claudeMd = null;
+      const tasks = [];
+
+      zip.forEach((relPath, entry) => {
+        if (entry.dir) return;
+        tasks.push(entry.async('string').then(content => {
+          const lower = relPath.toLowerCase();
+          const name  = relPath.split('/').pop().replace(/\.md$/i, '');
+          if (lower.startsWith('commands/') || lower.startsWith('command/')) {
+            commands.push({ name, content });
+          } else if (lower.startsWith('skills/') || lower.startsWith('skill/')) {
+            skills.push({ name, content });
+          } else if (lower === 'claude.md') {
+            claudeMd = content;
+          } else if (lower.endsWith('.md')) {
+            // unknown folder — treat as command
+            commands.push({ name, content });
+          }
+        }));
+      });
+
+      await Promise.all(tasks);
+      const bundle = JSON.stringify({
+        type: 'claude-map-bundle',
+        version: '1',
+        ...(commands.length ? { commands } : {}),
+        ...(skills.length   ? { skills }   : {}),
+        ...(claudeMd        ? { claudeMd } : {}),
+      }, null, 2);
+      document.getElementById('import-textarea').value = bundle;
+      previewImport();
+    } catch (e) {
+      alert('Could not read ZIP: ' + e.message);
+    }
+  } else {
+    const reader = new FileReader();
+    reader.onload = () => {
+      document.getElementById('import-textarea').value = reader.result;
+      previewImport();
+    };
+    reader.readAsText(file);
+  }
 }
 
 function previewImport() {
@@ -4065,6 +4237,53 @@ async function confirmBundleExport() {
     URL.revokeObjectURL(url);
   } catch (e) { alert('Export failed: ' + e.message); }
   closeBundleModal();
+}
+
+// ─── Share / Download Commands ────────────────────────────────
+function triggerDownload(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function shareCommandByName(btn, name) {
+  const allCmds = [
+    ...(State.scan?.global?.commands || []),
+    ...(State.scan?.project?.localCommands || []),
+  ];
+  const cmd = allCmds.find(c => c.name === name);
+  if (!cmd) return;
+  const blob = new Blob([cmd.body], { type: 'text/markdown' });
+  triggerDownload(`${name}.md`, blob);
+  const orig = btn.textContent;
+  btn.textContent = '✓ Saved';
+  btn.classList.add('copied');
+  setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+}
+
+async function shareCommandSet(scope, btn) {
+  const cmds = scope === 'local'
+    ? State.scan?.project?.localCommands || []
+    : State.scan?.global?.commands || [];
+  if (!cmds.length) return;
+
+  const zip = new JSZip();
+  const folder = zip.folder('commands');
+  cmds.forEach(c => folder.file(`${c.name}.md`, c.body));
+  const blob = await zip.generateAsync({ type: 'blob' });
+
+  const label = scope === 'local'
+    ? (projectName(State.projectPath) || 'project')
+    : 'global';
+  triggerDownload(`claude-commands-${label}.zip`, blob);
+
+  const orig = btn.textContent;
+  btn.textContent = `✓ Downloaded`;
+  btn.classList.add('copied');
+  setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
 }
 
 // ─── Export & Refresh ─────────────────────────────────────────
@@ -4225,6 +4444,37 @@ async function browserNavigate(dirPath) {
 }
 
 // ─── Init ─────────────────────────────────────────────────────
+async function initFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const slug   = params.get('project');
+  const tab    = params.get('tab');
+
+  await loadPinnedProjects();
+
+  if (slug) {
+    const fullPath = resolveProjectSlug(slug);
+    if (fullPath) {
+      await selectProject(fullPath);
+      if (tab && TABS_PROJECT.includes(tab)) {
+        State.currentTab = tab;
+        renderApp();
+      }
+    } else {
+      // Slug not found — load global silently
+      await loadGlobal();
+    }
+  } else {
+    await loadGlobal();
+    if (tab && TABS_GLOBAL.includes(tab)) {
+      State.currentTab = tab;
+      renderApp();
+    }
+  }
+
+  // Normalize URL to canonical form without pushing a new history entry
+  history.replaceState(null, '', buildUrl());
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initSSE();

@@ -633,6 +633,16 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .session-copy-btn { flex-shrink: 0; font-size: 11px; padding: 3px 10px; }
 .session-copy-btn.copied { color: var(--accent-green); border-color: var(--accent-green); }
+
+/* Share commands */
+.section-row { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 8px; }
+.section-row .section-title { margin: 0; }
+.cmd-share-btn { font-size: 10px; padding: 2px 8px; opacity: 0; transition: opacity 0.15s; }
+.card:hover .cmd-share-btn { opacity: 1; }
+.cmd-share-btn.copied,
+.cmd-share-all-btn.copied { color: var(--accent-green); border-color: var(--accent-green); }
+.cmd-share-all-btn { font-size: 11px; padding: 3px 10px; white-space: nowrap; }
+
 .session-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; padding: 1px 6px; border-radius: 8px; background: var(--bg-surface); border: 1px solid var(--bg-border); color: var(--text-secondary); }
 .session-badge.branch { color: var(--accent-blue); border-color: rgba(79,163,224,0.3); }
 .session-badge.model  { color: #b07cda; border-color: rgba(155,89,182,0.3); }
@@ -718,8 +728,16 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .card-delete-btn:hover { color: var(--accent-red, #f85149) !important; border-color: rgba(248,81,73,0.4) !important; }
 
 /* ── Import Modal ───────────────────────────────────────── */
-.import-drop-zone { border: 2px dashed var(--bg-border); border-radius: var(--radius-md); padding: 20px; text-align: center; font-size: 13px; color: var(--text-muted); cursor: pointer; transition: var(--transition); margin-bottom: 10px; }
-.import-drop-zone.dragover { border-color: var(--accent-teal); color: var(--accent-teal); background: rgba(0,212,170,0.05); }
+.import-drop-zone {
+  border: 2px dashed var(--bg-border); border-radius: var(--radius-md);
+  padding: 18px 20px; text-align: center; cursor: pointer;
+  transition: var(--transition); margin-bottom: 10px;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+}
+.import-drop-zone:hover { border-color: var(--accent-teal); background: rgba(0,212,170,0.04); }
+.import-drop-zone.dragover { border-color: var(--accent-teal); background: rgba(0,212,170,0.07); }
+.import-drop-label { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
+.import-drop-sub { font-size: 11px; color: var(--text-muted); letter-spacing: 0.02em; }
 .import-textarea { width: 100%; min-height: 120px; max-height: 200px; background: var(--bg-surface); border: 1px solid var(--bg-border); border-radius: var(--radius-sm); padding: 10px; font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); resize: vertical; box-sizing: border-box; }
 .import-textarea:focus { outline: none; border-color: var(--accent-teal); }
 .import-preview { background: var(--bg-surface); border: 1px solid var(--bg-border); border-radius: var(--radius-sm); padding: 10px; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
