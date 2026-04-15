@@ -304,6 +304,95 @@ function escapeHtml(str) {
 
 function escapeAttr(str) { return escapeHtml(str || ''); }
 
+function stripWrappingQuotes(str) {
+  const s = String(str || '').trim();
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith('\'') && s.endsWith('\''))) {
+    return s.slice(1, -1).trim();
+  }
+  return s;
+}
+
+function utf8ToBase64(str) {
+  try {
+    const bytes = new TextEncoder().encode(String(str || ''));
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+    return btoa(binary);
+  } catch {
+    return '';
+  }
+}
+
+function base64ToUtf8(str) {
+  try {
+    const binary = atob(String(str || ''));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return '';
+  }
+}
+
+function readMarkdownPayload(el) {
+  if (!el) return '';
+  if (el.dataset?.rawB64) {
+    const decoded = base64ToUtf8(el.dataset.rawB64);
+    if (decoded) return decoded;
+  }
+  return el.dataset?.raw || '';
+}
+
+function renderMarkdown(text) {
+  if (typeof marked !== 'undefined' && typeof marked.parse === 'function') {
+    return marked.parse(text);
+  }
+  // Built-in fallback when CDN fails to load marked
+  const t = text
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return t
+    .replace(/^#{3} (.+)$/gm, '<h3>$1</h3>')
+    .replace(/^#{2} (.+)$/gm, '<h2>$1</h2>')
+    .replace(/^# (.+)$/gm, '<h1>$1</h1>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+    .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>[\s\S]+?<\/li>)(?!\s*<li>)/g, '<ul>$1</ul>')
+    .replace(/\n\n+/g, '</p><p>')
+    .replace(/^(?!<[hulo])(.+)$/gm, (_, l) => l ? l : '')
+    .replace(/^(<p>)?([^<\n].*)$/gm, (m, p, l) => p ? m : `<p>${l}</p>`);
+}
+
+function extractImportedSkillName(mdText) {
+  const text = String(mdText || '');
+
+  // Try frontmatter first (`name: ...`).
+  const frontmatterBlock = text.match(/^\uFEFF?\s*---\s*[\r\n]+([\s\S]*?)^[ \t]*---\s*(?:[\r\n]|$)/m);
+  if (frontmatterBlock?.[1]) {
+    const frontmatterName = frontmatterBlock[1].match(/^\s*name\s*:\s*(.+?)\s*$/mi);
+    if (frontmatterName?.[1]) {
+      const clean = stripWrappingQuotes(frontmatterName[1]);
+      if (clean) return clean;
+    }
+  }
+
+  // Fallback to first markdown H1 heading.
+  const headingName = text.match(/^\s*#\s+(.+?)\s*$/m);
+  if (headingName?.[1]) {
+    const clean = stripWrappingQuotes(headingName[1]);
+    if (clean) return clean;
+  }
+
+  return 'imported-skill';
+}
+
 function formatNum(n) {
   if (n == null) return '—';
   return Number(n).toLocaleString();
@@ -769,6 +858,7 @@ function renderMetricCard(label, value, sub, accent) {
 
 function renderExpandableCard({ id, title, metaHtml, excerpt, body }) {
   const safeId = id.replace(/[^a-z0-9_-]/gi, '_');
+  const rawB64 = utf8ToBase64(body || '');
   return `<div class="card" id="card-${safeId}">
     <div class="card-header" onclick="toggleCard('${safeId}')">
       <span class="card-title">${escapeHtml(title)}</span>
@@ -776,7 +866,7 @@ function renderExpandableCard({ id, title, metaHtml, excerpt, body }) {
       <span class="expand-icon">▶</span>
     </div>
     <div class="card-excerpt">${escapeHtml(excerpt || '')}</div>
-    <div class="card-body hidden" id="body-${safeId}" data-raw="${escapeAttr(body)}"></div>
+    <div class="card-body hidden" id="body-${safeId}" data-raw-b64="${escapeAttr(rawB64)}"></div>
   </div>`;
 }
 
@@ -789,11 +879,11 @@ function toggleCard(id) {
 
   if (isOpen && !body.dataset.rendered) {
     body.dataset.rendered = '1';
-    const raw = body.dataset.raw || '';
+    const raw = readMarkdownPayload(body);
     const mdDiv = document.createElement('div');
     mdDiv.className = 'markdown-body';
     try {
-      mdDiv.innerHTML = marked.parse(raw);
+      mdDiv.innerHTML = renderMarkdown(raw);
       mdDiv.querySelectorAll('pre code').forEach(b => {
         if (typeof hljs !== 'undefined') hljs.highlightElement(b);
       });
@@ -1785,6 +1875,7 @@ function renderSkillCard(skill, prefix, scope) {
   const checked = State.shareItems.has(key);
   const m      = skill.meta || {};
   const safeId = (prefix + skill.name).replace(/[^a-z0-9_-]/gi, '_');
+  const rawB64 = utf8ToBase64(skill.body || '');
   const badges = [];
   if (m.userInvocable) badges.push('<span class="skill-badge invocable">user-invocable</span>');
   if (m.agent) badges.push(`<span class="skill-badge agent">agent: ${escapeHtml(m.agent)}</span>`);
@@ -1812,7 +1903,7 @@ function renderSkillCard(skill, prefix, scope) {
     </div>
     ${badges.length ? `<div class="skill-meta-row">${badges.join('')}</div>` : ''}
     ${toolsHtml}
-    <div class="skill-card-body hidden" id="body-${safeId}" data-raw="${escapeAttr(skill.body)}"></div>
+    <div class="skill-card-body hidden" id="body-${safeId}" data-raw-b64="${escapeAttr(rawB64)}"></div>
   </div>`;
 
   if (!sm) return cardHtml;
@@ -1832,9 +1923,9 @@ function toggleSkillBody(id) {
     const mdDiv = document.createElement('div');
     mdDiv.className = 'markdown-body';
     try {
-      mdDiv.innerHTML = marked.parse(body.dataset.raw || '');
+      mdDiv.innerHTML = renderMarkdown(readMarkdownPayload(body));
       mdDiv.querySelectorAll('pre code').forEach(b => { if (typeof hljs !== 'undefined') hljs.highlightElement(b); });
-    } catch { mdDiv.textContent = body.dataset.raw; }
+    } catch { mdDiv.textContent = readMarkdownPayload(body); }
     body.appendChild(mdDiv);
     attachCopyButtons(body);
   }
@@ -4292,8 +4383,7 @@ function previewImport() {
   } catch { /* not JSON, treat as markdown */ }
 
   // Markdown skill/command
-  const nameMatch = text.match(/^---[\s\S]*?name:\s*(.+?)[\s\r\n]/m);
-  const name = nameMatch ? nameMatch[1].trim() : 'imported-skill';
+  const name = extractImportedSkillName(text);
   previewEl.innerHTML = `<strong>Skill:</strong> ${escapeHtml(name)} (${text.split(/\s+/).length} words)`;
   previewEl.classList.remove('hidden');
   confirmBtn.disabled = false;
