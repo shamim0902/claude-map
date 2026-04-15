@@ -1202,7 +1202,7 @@ function renderNodeDetailPanel(nodeId, analysis) {
       if (!cm?.raw) return `<p class="text-muted">No global CLAUDE.md found</p>`;
       const md = document.createElement('div');
       md.className = 'markdown-body';
-      try { md.innerHTML = marked.parse(cm.raw || ''); } catch { md.textContent = cm.raw; }
+      try { md.innerHTML = renderMarkdown(cm.raw || ''); } catch { md.textContent = cm.raw; }
       return md.outerHTML;
     }
     case 'global-commands': {
@@ -1249,7 +1249,7 @@ function renderNodeDetailPanel(nodeId, analysis) {
       if (!lc?.raw) return `<p class="text-muted">No project CLAUDE.md found</p>`;
       const md = document.createElement('div');
       md.className = 'markdown-body';
-      try { md.innerHTML = marked.parse(lc.raw || ''); } catch { md.textContent = lc.raw; }
+      try { md.innerHTML = renderMarkdown(lc.raw || ''); } catch { md.textContent = lc.raw; }
       return md.outerHTML;
     }
     case 'local-settings': {
@@ -1696,8 +1696,11 @@ function toggleClaudeMdFull() {
   if (toggle) toggle.textContent = showing ? '▼ Expand full CLAUDE.md' : '▲ Collapse';
   if (!full.dataset.rendered) {
     full.dataset.rendered = '1';
-    try { full.innerHTML = marked.parse(State.scan.global.claudeMd.raw || ''); }
-    catch { full.textContent = State.scan.global.claudeMd.raw || ''; }
+    const raw = (State.mode === 'project'
+      ? State.scan.project?.claudeMd?.raw
+      : State.scan.global?.claudeMd?.raw) || '';
+    try { full.innerHTML = renderMarkdown(raw); }
+    catch { full.textContent = raw; }
     attachCopyButtons(full);
   }
 }
