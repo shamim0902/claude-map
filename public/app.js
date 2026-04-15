@@ -8,6 +8,7 @@ const State = {
   mode: 'global',        // 'global' | 'project'
   projectPath: '',
   currentTab: 'overview',
+  currentGroup: 'dashboard',  // active top-level tab group id
   theme: 'dark',
 
   // Data
@@ -132,8 +133,23 @@ function formatCost(n) {
 }
 
 // ─── Tab Definitions ──────────────────────────────────────────
-const TABS_GLOBAL  = ['overview','commands','skills','rules','hooks','agents','plans','sessions','settings','mcp','stats','raw','editor'];
-const TABS_PROJECT = ['map','overview','skills','commands','rules','hooks','agents','sessions','git','settings','mcp','raw','editor'];
+const TAB_GROUPS_GLOBAL = [
+  { id: 'dashboard', label: 'Dashboard', icon: '⊞', tabs: ['overview'] },
+  { id: 'config',    label: 'Config',    icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
+  { id: 'activity',  label: 'Activity',  icon: '◷', tabs: ['sessions', 'plans'] },
+  { id: 'editor',    label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+];
+
+const TAB_GROUPS_PROJECT = [
+  { id: 'dashboard', label: 'Dashboard', icon: '◈', tabs: ['map'] },
+  { id: 'config',    label: 'Config',    icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
+  { id: 'activity',  label: 'Activity',  icon: '◷', tabs: ['sessions', 'git'] },
+  { id: 'editor',    label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+];
+
+// Flat arrays derived for backward compat (URL routing, popstate, etc.)
+const TABS_GLOBAL  = TAB_GROUPS_GLOBAL.flatMap(g => g.tabs);
+const TABS_PROJECT = TAB_GROUPS_PROJECT.flatMap(g => g.tabs);
 
 const TAB_META = {
   map:      { label: 'Map',     icon: '◈' },
@@ -147,7 +163,7 @@ const TAB_META = {
   stats:    { label: 'Stats',    icon: '▤' },
   raw:      { label: 'Raw',      icon: '{ }' },
   git:      { label: 'Git',      icon: '⎇' },
-  editor:   { label: 'Editor',   icon: '✎' },
+  editor:   { label: 'Code Editor', icon: '✎' },
   rules:    { label: 'Rules',   icon: '⊘' },
   hooks:    { label: 'Hooks',   icon: '⚓' },
   agents:   { label: 'Agents',  icon: '◎' },
@@ -155,6 +171,31 @@ const TAB_META = {
 
 function getCurrentTabs() {
   return State.mode === 'project' ? TABS_PROJECT : TABS_GLOBAL;
+}
+
+function getTabGroups() {
+  return State.mode === 'project' ? TAB_GROUPS_PROJECT : TAB_GROUPS_GLOBAL;
+}
+
+function syncGroupFromTab(tab) {
+  const groups = getTabGroups();
+  const g = groups.find(gr => gr.tabs.includes(tab));
+  if (g) State.currentGroup = g.id;
+}
+
+function navigateGroup(groupId) {
+  const groups = getTabGroups();
+  const g = groups.find(gr => gr.id === groupId);
+  if (!g) return;
+  State.currentGroup = groupId;
+  if (!g.tabs.includes(State.currentTab)) {
+    State.currentTab = g.tabs[0];
+    State.shareMode  = false;
+    State.shareItems = new Map();
+  }
+  State.activeNodeId = null;
+  updateUrl();
+  renderApp();
 }
 
 // ─── API Client ───────────────────────────────────────────────
@@ -300,6 +341,13 @@ function projectName(p) {
   return p ? (p.split('/').pop() || p) : '';
 }
 
+function projectAbbrev(name) {
+  if (!name) return '??';
+  const parts = name.split(/[-_ .]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
 // ─── Theme ────────────────────────────────────────────────────
 function initTheme() {
   const saved = localStorage.getItem('claude-map-theme') || 'dark';
@@ -322,6 +370,27 @@ function toggleTheme() {
   applyTheme(State.theme === 'dark' ? 'light' : 'dark');
 }
 
+// ─── Collapsible Sidebar ──────────────────────────────────────
+function toggleSidebarCollapse() {
+  const shell = document.querySelector('.app-shell');
+  if (!shell) return;
+  shell.classList.toggle('sidebar-collapsed');
+  const collapsed = shell.classList.contains('sidebar-collapsed');
+  const btn = document.querySelector('.sidebar-collapse-btn');
+  if (btn) btn.textContent = collapsed ? '»' : '«';
+  try { localStorage.setItem('claude-map-sidebar-collapsed', collapsed ? '1' : ''); } catch {}
+}
+
+function restoreSidebarState() {
+  try {
+    if (localStorage.getItem('claude-map-sidebar-collapsed') === '1') {
+      document.querySelector('.app-shell')?.classList.add('sidebar-collapsed');
+      const btn = document.querySelector('.sidebar-collapse-btn');
+      if (btn) btn.textContent = '»';
+    }
+  } catch {}
+}
+
 // ─── Mobile Sidebar ───────────────────────────────────────────
 function toggleMobileSidebar() {
   document.querySelector('.sidebar')?.classList.toggle('open');
@@ -338,6 +407,7 @@ function selectGlobal() {
   State.mode        = 'global';
   State.projectPath = '';
   State.currentTab  = 'overview';
+  State.currentGroup = 'dashboard';
   State.analysis    = null;
   State.activeNodeId = null;
   State.editorFileTree = null;
@@ -379,6 +449,7 @@ async function selectProject(path) {
   State.mode        = 'project';
   State.projectPath = path;
   State.currentTab  = 'map';
+  State.currentGroup = 'dashboard';
   State.activeNodeId = null;
   State.analysis    = null;
   State.analysisLoading = true;
@@ -427,6 +498,7 @@ function navigate(tab) {
     State.shareItems = new Map();
   }
   State.currentTab = tab;
+  syncGroupFromTab(tab);
   State.activeNodeId = null;
   updateUrl();
   renderApp();
@@ -496,6 +568,7 @@ window.addEventListener('popstate', () => {
       // Same project — instant tab switch
       const t = (tab && TABS_PROJECT.includes(tab)) ? tab : 'map';
       State.currentTab = t;
+      syncGroupFromTab(t);
       State.activeNodeId = null;
       _suppressUrlUpdate = false;
       renderApp();
@@ -503,6 +576,7 @@ window.addEventListener('popstate', () => {
       selectProject(fullPath).then(() => {
         if (tab && TABS_PROJECT.includes(tab)) {
           State.currentTab = tab;
+          syncGroupFromTab(tab);
           renderApp();
         }
         _suppressUrlUpdate = false;
@@ -516,6 +590,7 @@ window.addEventListener('popstate', () => {
     if (State.mode === 'global') {
       const t = (tab && TABS_GLOBAL.includes(tab)) ? tab : 'overview';
       State.currentTab = t;
+      syncGroupFromTab(t);
       State.activeNodeId = null;
       _suppressUrlUpdate = false;
       renderApp();
@@ -523,6 +598,7 @@ window.addEventListener('popstate', () => {
       selectGlobal();
       if (tab && TABS_GLOBAL.includes(tab)) {
         State.currentTab = tab;
+        syncGroupFromTab(tab);
         renderApp();
       }
       _suppressUrlUpdate = false;
@@ -556,27 +632,42 @@ function renderTabBar() {
   const tabBar = document.getElementById('tab-bar');
   if (!tabBar) return;
 
-  const tabs = getCurrentTabs();
+  const groups = getTabGroups();
+  const label = isProject ? projectName(State.projectPath) : 'Global';
 
-  function renderTab(id) {
+  // Aggregate badge count for a group (sum of child tab counts)
+  function groupBadge(group) {
+    const total = group.tabs.reduce((s, t) => s + (counts[t] || 0), 0);
+    return total > 0 ? `<span class="tab-badge">${total}</span>` : '';
+  }
+
+  // Tier 1: group-level tabs
+  const tier1 = groups.map(gr => {
+    const active = gr.id === State.currentGroup;
+    return `<div class="tab-group-item ${active ? 'active' : ''}" onclick="navigateGroup('${gr.id}')">
+      <span class="tab-icon">${gr.icon}</span>${gr.label}${groupBadge(gr)}
+    </div>`;
+  }).join('');
+
+  // Tier 2: sub-tabs for active group
+  const activeGroup = groups.find(gr => gr.id === State.currentGroup) || groups[0];
+  const tier2 = activeGroup.tabs.map(id => {
     const meta   = TAB_META[id] || { label: id };
     const active = id === State.currentTab;
     const badge  = counts[id] != null && counts[id] > 0
       ? `<span class="tab-badge">${counts[id]}</span>` : '';
-    return `<div class="tab-item ${active ? 'active' : ''}" onclick="navigate('${id}')">
-      <span class="tab-icon">${meta.icon || ''}</span>${meta.label}${badge}
+    return `<div class="tab-sub-item ${active ? 'active' : ''}" onclick="navigate('${id}')">
+      ${meta.label}${badge}
     </div>`;
-  }
-
-  const label = isProject
-    ? projectName(State.projectPath)
-    : 'Global';
+  }).join('');
 
   tabBar.innerHTML = `
-    <div class="tab-group">
+    <div class="tab-tier1">
       <span class="tab-group-label" title="${isProject ? escapeAttr(State.projectPath) : '~/.claude/'}">${escapeHtml(label)}</span>
-      ${tabs.map(renderTab).join('')}
-    </div>`;
+      <span class="tab-tier1-divider"></span>
+      ${tier1}
+    </div>
+    ${activeGroup.tabs.length > 1 ? `<div class="tab-tier2">${tier2}</div>` : ''}`;
 }
 
 function renderTabContent() {
@@ -623,7 +714,7 @@ function renderTabContent() {
   if (State.currentTab === 'git' && State.mode === 'project' && !State.gitStatus && !State.gitStatusLoading) {
     loadGitTab();
   }
-  if (State.currentTab === 'stats' || State.currentTab === 'overview') {
+  if (State.currentTab === 'stats' || State.currentTab === 'overview' || State.currentTab === 'map') {
     requestAnimationFrame(() => initStatsChart());
   }
   if (State.currentTab === 'editor') {
@@ -634,7 +725,15 @@ function renderTabContent() {
 
 // ─── State renders ────────────────────────────────────────────
 function renderLoading() {
-  return `<div class="loading-state"><div class="spinner"></div><p>Scanning configuration…</p></div>`;
+  return `<div style="padding:14px 18px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:16px">
+      ${Array(4).fill('<div class="skeleton skeleton-metric"></div>').join('')}
+    </div>
+    ${Array(3).fill('<div class="skeleton skeleton-card"></div>').join('')}
+    <div class="skeleton skeleton-text long"></div>
+    <div class="skeleton skeleton-text medium"></div>
+    <div class="skeleton skeleton-text short"></div>
+  </div>`;
 }
 
 function renderError(err) {
@@ -682,7 +781,6 @@ function toggleCard(id) {
   const body = document.getElementById(`body-${id}`);
   if (!card || !body) return;
   const isOpen = body.classList.toggle('visible');
-  body.classList.toggle('hidden', !isOpen);
   card.classList.toggle('expanded', isOpen);
 
   if (isOpen && !body.dataset.rendered) {
@@ -734,9 +832,10 @@ function renderProjectList() {
 
   // Global Config entry (always first)
   const isGlobal = State.mode === 'global';
-  html += `<div class="sidebar-project-item ${isGlobal ? 'active' : ''}" onclick="selectGlobal()">
+  html += `<div class="sidebar-project-item global-entry ${isGlobal ? 'active' : ''}" onclick="selectGlobal()">
     <span class="proj-status-icon full">◈</span>
     <span class="proj-name">Global Config</span>
+    <span class="proj-abbrev proj-abbrev-global"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
   </div>`;
 
   // Pinned section
@@ -769,10 +868,12 @@ function renderProjectItem(path, pinned) {
     ? `<button class="remove-pin" title="Remove" onclick="event.stopPropagation();removePinnedProject('${escapeAttr(path)}')">×</button>`
     : '';
 
+  const abbrev = projectAbbrev(name);
   return `<div class="sidebar-project-item ${isActive ? 'active' : ''}"
              onclick="selectProject('${escapeAttr(path)}')" title="${escapeAttr(path)}">
     <span class="${iconClass}">${icon}</span>
     <span class="proj-name">${escapeHtml(name)}</span>
+    <span class="proj-abbrev">${escapeHtml(abbrev)}</span>
     ${removeBtn}
   </div>`;
 }
@@ -962,7 +1063,8 @@ function renderMapTab() {
       </div>
       <div class="map-detail-body">${detailHtml}</div>
     </div>` : ''}
-  </div>`;
+  </div>
+  ${renderProjectOverview()}`;
 }
 
 function getNodeTitle(nodeId, analysis) {
@@ -1166,6 +1268,29 @@ function drawMapSvgLines() {
       path.setAttribute('stroke-dasharray', '3 3');
     }
     svg.appendChild(path);
+
+    // Animate line drawing
+    if (def.type !== 'absent') {
+      try {
+        const len = path.getTotalLength();
+        path.setAttribute('stroke-dasharray', len);
+        path.setAttribute('stroke-dashoffset', len);
+        path.style.animation = `map-line-draw 0.6s ease forwards ${Math.random() * 0.3}s`;
+      } catch {}
+    }
+  });
+
+  // Add glow filter if not present
+  if (!svg.querySelector('defs')) {
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
+    filter.id = 'glow';
+    filter.innerHTML = '<feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>';
+    defs.appendChild(filter);
+    svg.prepend(defs);
+  }
+  svg.querySelectorAll('path').forEach(p => {
+    if (p.getAttribute('stroke-opacity') === '0.7') p.setAttribute('filter', 'url(#glow)');
   });
 
   // ResizeObserver to redraw on resize
@@ -1287,13 +1412,47 @@ function renderGlobalOverview() {
       </div>`
     : `${chartHtml}${modelHtml}${hourHtml}`;
 
+  // Tool usage (from stats tab)
+  const toolHtml = stats ? (State.statsToolData
+    ? renderToolBreakdown(State.statsToolData.toolUsage, `${State.statsToolData.sessionsScanned} sessions scanned`)
+    : `<div class="section">
+        <div class="section-title">Tool Usage</div>
+        <button class="btn-secondary" onclick="loadToolStats()" ${State.statsToolLoading ? 'disabled' : ''}>
+          ${State.statsToolLoading ? 'Scanning sessions…' : 'Load Tool Analytics'}
+        </button>
+      </div>`) : '';
+
+  // Daily detail table (from stats tab)
+  const sorted = [...daily].sort((a, b) => b.date.localeCompare(a.date));
+  const dailyTableHtml = sorted.length ? `<div class="section">
+    <div class="section-title">Daily Detail</div>
+    <table class="data-table">
+      <thead><tr>
+        <th>Date</th>
+        <th style="text-align:right">Messages</th>
+        <th style="text-align:right">Tool Calls</th>
+        <th style="text-align:right">Sessions</th>
+      </tr></thead>
+      <tbody>${sorted.slice(0, 30).map(d =>
+        `<tr>
+          <td style="color:var(--text-secondary)">${d.date}</td>
+          <td style="text-align:right">${formatNum(d.messageCount)}</td>
+          <td style="text-align:right">${formatNum(d.toolCallCount)}</td>
+          <td style="text-align:right">${d.sessionCount}</td>
+        </tr>`
+      ).join('')}</tbody>
+    </table>
+  </div>` : '';
+
   return `
     ${usageRow}
     ${configRow}
     ${statsLayout}
+    ${State.statsToolData ? `<div class="section"><div class="section-title">Tool Usage</div>${toolHtml}</div>` : toolHtml}
     ${configGrid}
     ${claudeMdHtml}
     ${addDirsHtml}
+    ${dailyTableHtml}
     ${projectsHtml}
   `;
 }
@@ -3370,6 +3529,7 @@ function spawnTerminal() {
         }
         openEditorFile(resolved);
         State.currentTab = 'editor';
+        syncGroupFromTab('editor');
         renderApp();
       },
       { urlRegex: filePathRegex }
@@ -4457,6 +4617,7 @@ async function initFromUrl() {
       await selectProject(fullPath);
       if (tab && TABS_PROJECT.includes(tab)) {
         State.currentTab = tab;
+        syncGroupFromTab(tab);
         renderApp();
       }
     } else {
@@ -4467,6 +4628,7 @@ async function initFromUrl() {
     await loadGlobal();
     if (tab && TABS_GLOBAL.includes(tab)) {
       State.currentTab = tab;
+      syncGroupFromTab(tab);
       renderApp();
     }
   }
@@ -4477,6 +4639,7 @@ async function initFromUrl() {
 
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
+  restoreSidebarState();
   initSSE();
   loadPinnedProjects().then(() => loadGlobal());
 
@@ -4486,6 +4649,7 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       if (State.currentTab !== 'editor') {
         State.currentTab = 'editor';
+        syncGroupFromTab('editor');
         renderApp();
       }
       const panel = document.getElementById('terminal-panel');
