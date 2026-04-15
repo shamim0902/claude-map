@@ -54,6 +54,12 @@ const State = {
   costReportLoading: false,
   costReportMode: false,
 
+  // Editor
+  editorPath: null,
+  editorDirty: false,
+  editorFileTree: null,
+  editorFileTreeLoading: false,
+
   // Stats
   statsToolData: null,
   statsToolLoading: false,
@@ -64,10 +70,34 @@ const State = {
   importScope: 'project',
   importPreview: null,
 
+  // Share
+  shareMode: false,           // share mode active on skills/commands tab
+  shareItems: new Map(),      // filePath-key → {name, type, scope, sourceProject}
+
   // Misc
   sseConnected: false,
   refreshTimer: null,
   statsSort: 'date-desc',
+
+  // Terminal
+  terminalPanelOpen: false,
+  terminalHeight: 280,
+
+  // Git tab
+  gitStatus:            null,
+  gitStatusLoading:     false,
+  gitDiff:              null,
+  gitDiffLoading:       false,
+  gitSelectedFile:      null,
+  gitCommitSummary:     '',
+  gitCommitBody:        '',
+  gitLog:               null,
+  gitWorktrees:         null,
+  gitBranches:          null,
+  gitRemotes:           null,
+  gitIsRepo:            null,
+  gitLogExpanded:       false,
+  gitWorktreesExpanded: false,
 };
 
 // ─── Model Pricing (per million tokens, USD) ──────────────────
@@ -102,8 +132,8 @@ function formatCost(n) {
 }
 
 // ─── Tab Definitions ──────────────────────────────────────────
-const TABS_GLOBAL  = ['overview','commands','skills','plans','sessions','settings','mcp','stats','raw'];
-const TABS_PROJECT = ['map','overview','skills','commands','sessions','settings','mcp','raw'];
+const TABS_GLOBAL  = ['overview','commands','skills','rules','hooks','agents','plans','sessions','settings','mcp','stats','raw','editor'];
+const TABS_PROJECT = ['map','overview','skills','commands','rules','hooks','agents','sessions','git','settings','mcp','raw','editor'];
 
 const TAB_META = {
   map:      { label: 'Map',     icon: '◈' },
@@ -116,6 +146,11 @@ const TAB_META = {
   mcp:      { label: 'MCP',      icon: '⚡' },
   stats:    { label: 'Stats',    icon: '▤' },
   raw:      { label: 'Raw',      icon: '{ }' },
+  git:      { label: 'Git',      icon: '⎇' },
+  editor:   { label: 'Editor',   icon: '✎' },
+  rules:    { label: 'Rules',   icon: '⊘' },
+  hooks:    { label: 'Hooks',   icon: '⚓' },
+  agents:   { label: 'Agents',  icon: '◎' },
 };
 
 function getCurrentTabs() {
@@ -163,7 +198,56 @@ const API = {
   costStats(projectPath) {
     const qs = projectPath ? `?project=${encodeURIComponent(projectPath)}` : '';
     return this.get(`/api/stats/costs${qs}`);
-  }
+  },
+  fileTree(dirPath, projectPath) {
+    const qs = projectPath ? `&project=${encodeURIComponent(projectPath)}` : '';
+    return this.get(`/api/file-tree?path=${encodeURIComponent(dirPath)}${qs}`);
+  },
+  saveFile(filePath, content, projectPath) {
+    return fetch('/api/file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath, content, project: projectPath || null }),
+    }).then(r => r.json());
+  },
+  share(items, targetProject) {
+    return fetch('/api/share', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items, targetProject }),
+    }).then(r => r.json());
+  },
+  deleteSkill(name, scope, projectPath) {
+    return fetch('/api/skills', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, scope, projectPath: projectPath || null }),
+    }).then(r => r.json());
+  },
+  deleteRule(name, scope, projectPath) {
+    return fetch('/api/rules', { method: 'DELETE', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, scope, projectPath: projectPath || null }) }).then(r=>r.json());
+  },
+  deleteAgent(name, scope, projectPath) {
+    return fetch('/api/agents', { method: 'DELETE', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, scope, projectPath: projectPath || null }) }).then(r=>r.json());
+  },
+
+  // ── Git ──────────────────────────────────────────────────────
+  gitIsRepo(p)                 { return this.get(`/api/git/is-repo?project=${encodeURIComponent(p)}`); },
+  gitStatus(p)                 { return this.get(`/api/git/status?project=${encodeURIComponent(p)}`); },
+  gitDiff(p, file, staged)     { return this.get(`/api/git/diff?project=${encodeURIComponent(p)}&file=${encodeURIComponent(file)}&staged=${staged ? 1 : 0}`); },
+  gitLog(p)                    { return this.get(`/api/git/log?project=${encodeURIComponent(p)}`); },
+  gitRemotes(p)                { return this.get(`/api/git/remotes?project=${encodeURIComponent(p)}`); },
+  gitBranches(p)               { return this.get(`/api/git/branches?project=${encodeURIComponent(p)}`); },
+  gitWorktrees(p)              { return this.get(`/api/git/worktrees?project=${encodeURIComponent(p)}`); },
+  gitStage(p, files)           { return fetch('/api/git/stage',   { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, files }) }).then(r=>r.json()); },
+  gitUnstage(p, files)         { return fetch('/api/git/unstage', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, files }) }).then(r=>r.json()); },
+  gitDiscard(p, file)          { return fetch('/api/git/discard', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, file  }) }).then(r=>r.json()); },
+  gitCommit(p, summary, body)  { return fetch('/api/git/commit',  { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, summary, body }) }).then(r=>r.json()); },
+  gitPull(p)                   { return fetch('/api/git/pull',    { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p }) }).then(r=>r.json()); },
+  gitPush(p)                   { return fetch('/api/git/push',    { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p }) }).then(r=>r.json()); },
+  gitCheckout(p, branch)               { return fetch('/api/git/checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, branch }) }).then(r=>r.json()); },
+  gitWorktreeAdd(p, wtPath, br, existing){ return fetch('/api/git/worktree/add', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, path: wtPath, branch: br, existing: !!existing }) }).then(r=>r.json()); },
+  gitWorktreeRemove(p, wtPath) { return fetch('/api/git/worktree', { method:'DELETE', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, path: wtPath }) }).then(r=>r.json()); },
 };
 
 // ─── Utils ────────────────────────────────────────────────────
@@ -256,6 +340,12 @@ function selectGlobal() {
   State.currentTab  = 'overview';
   State.analysis    = null;
   State.activeNodeId = null;
+  State.editorFileTree = null;
+  State.editorFileTreeLoading = false;
+  State.gitStatus = null;
+  State.gitStatusLoading = false;
+  State.gitIsRepo = null;
+  _leaveEditorTab();
 
   closeMobileSidebar();
   updateUrl();
@@ -300,8 +390,23 @@ async function selectProject(path) {
   State.historyEntries = null;
   State.historyMode = false;
   State.statsToolData = null;
-  saveProjectSlug(path);
-  updateUrl();
+  State.editorFileTree = null;
+  State.editorFileTreeLoading = false;
+  // Reset git state
+  State.gitStatus = null;
+  State.gitStatusLoading = false;
+  State.gitDiff = null;
+  State.gitDiffLoading = false;
+  State.gitSelectedFile = null;
+  State.gitCommitSummary = '';
+  State.gitCommitBody = '';
+  State.gitLog = null;
+  State.gitWorktrees = null;
+  State.gitRemotes = null;
+  State.gitIsRepo = null;
+  State.gitLogExpanded = false;
+  State.gitWorktreesExpanded = false;
+  _leaveEditorTab();
   renderApp();
   renderProjectList();
 
@@ -317,6 +422,10 @@ async function selectProject(path) {
 }
 
 function navigate(tab) {
+  if (tab !== State.currentTab) {
+    State.shareMode  = false;
+    State.shareItems = new Map();
+  }
   State.currentTab = tab;
   State.activeNodeId = null;
   updateUrl();
@@ -438,6 +547,10 @@ function renderTabBar() {
     commands: isProject ? (proj?.localCommands?.length || 0) + (g?.commands?.length || 0) : g?.commands?.length || 0,
     skills:   isProject ? (proj?.localSkills?.length || 0) + (g?.skills?.length || 0) : g?.skills?.length || 0,
     plans:    g?.plans?.length || 0,
+    git:      State.gitStatus?.files?.length || 0,
+    rules:    (isProject ? (proj?.localRules?.length || 0) : 0) + (g?.rules?.length || 0),
+    agents:   (isProject ? (proj?.localAgents?.length || 0) : 0) + (g?.agents?.length || 0),
+    hooks:    Object.values(g?.settings?.hooksRaw || {}).flat().reduce((n, e) => n + (e?.hooks?.length || 1), 0),
   };
 
   const tabBar = document.getElementById('tab-bar');
@@ -489,16 +602,32 @@ function renderTabContent() {
     skills:   renderSkills,
     plans:    renderPlans,
     sessions: renderSessions,
+    git:      renderGit,
     settings: renderSettings,
     mcp:      renderMCP,
     stats:    renderStats,
     raw:      renderRaw,
+    editor:   renderEditor,
+    rules:    renderRules,
+    hooks:    renderHooks,
+    agents:   renderAgents,
   };
 
   el.innerHTML = (renderers[State.currentTab] || renderEmpty)();
 
+  // Toggle editor-active class so tray/panel are scoped to editor tab
+  const mainArea = document.getElementById('main-area');
+  if (mainArea) mainArea.classList.toggle('editor-active', State.currentTab === 'editor');
+  if (State.currentTab === 'editor') renderTray();
+
+  if (State.currentTab === 'git' && State.mode === 'project' && !State.gitStatus && !State.gitStatusLoading) {
+    loadGitTab();
+  }
   if (State.currentTab === 'stats' || State.currentTab === 'overview') {
     requestAnimationFrame(() => initStatsChart());
+  }
+  if (State.currentTab === 'editor') {
+    setTimeout(() => initMonaco(), 0);
   }
   attachCopyButtons();
 }
@@ -1348,6 +1477,8 @@ function renderCommands() {
   const localCommands  = State.scan.project?.localCommands || [];
   const isProject      = State.mode === 'project';
   const totalCount     = globalCommands.length + (isProject ? localCommands.length : 0);
+  const sm             = State.shareMode;
+  const selCount       = State.shareItems.size;
 
   const q = State.commandFilter.toLowerCase();
   const filterCmd = c => !q || c.name.toLowerCase().includes(q) || c.excerpt.toLowerCase().includes(q) || c.body.toLowerCase().includes(q);
@@ -1363,7 +1494,7 @@ function renderCommands() {
     </div>
     <div class="cards-grid">
       ${filteredLocal.length
-        ? filteredLocal.map(c => renderCommandCard(c, 'lcmd_')).join('')
+        ? filteredLocal.map(c => renderCommandCard(c, 'lcmd_', 'project')).join('')
         : `<div class="empty-state" style="min-height:80px"><p>No local commands match "<strong>${escapeHtml(q)}</strong>"</p></div>`}
     </div>` : '';
 
@@ -1380,7 +1511,7 @@ function renderCommands() {
     ${globalSectionLabel}
     <div class="cards-grid">
       ${filteredGlobal.length
-        ? filteredGlobal.map(c => renderCommandCard(c, 'cmd_')).join('')
+        ? filteredGlobal.map(c => renderCommandCard(c, 'cmd_', 'global')).join('')
         : globalCommands.length
           ? `<div class="empty-state" style="min-height:80px"><p>No global commands match "<strong>${escapeHtml(q)}</strong>"</p></div>`
           : `<div class="empty-state" style="min-height:80px"><p>No global commands</p></div>`}
@@ -1397,29 +1528,37 @@ function renderCommands() {
         <input class="search-input" placeholder="Filter commands…"
                value="${escapeAttr(State.commandFilter)}"
                oninput="State.commandFilter=this.value;renderTabContent()">
-        <button class="btn-icon" onclick="openImportModal('command')" title="Import commands">↑ Import</button>
-        ${shareAllBtn}
+        <button class="btn-icon${sm ? ' active' : ''}" onclick="toggleShareMode()" title="${sm ? 'Cancel share' : 'Share commands'}">⇥ Share</button>
       </div>
     </div>
+    ${sm ? renderShareBar(selCount, 'commands') : ''}
     ${localSection}
     ${globalSection}
   </div>`;
 }
 
-function renderCommandCard(c, prefix = '') {
+function renderCommandCard(c, prefix = '', scope = 'global') {
+  const sm = State.shareMode;
+  const key = `command:${scope}:${c.name}`;
+  const checked = State.shareItems.has(key);
+  const shareBtn = sm ? '' : `<button class="btn-icon card-share-btn" onclick="event.stopPropagation();shareItemDirect('command','${escapeAttr(c.name)}','${scope}')" title="Share to project">⇥</button>`;
   const metaHtml = [
     c.hasArgs ? `<span class="type-badge args">$ARGS</span>` : '',
-    `<span style="font-size:11px;color:var(--text-muted)">${c.wordCount}w</span>`,
-    `<button class="btn-icon cmd-share-btn" title="Download as .md file"
-       onclick="event.stopPropagation();shareCommandByName(this,'${escapeAttr(c.name)}')">↓ .md</button>`
+    shareBtn,
+    `<span style="font-size:11px;color:var(--text-muted)">${c.wordCount}w</span>`
   ].join('');
-  return renderExpandableCard({
+  const card = renderExpandableCard({
     id: prefix + c.name,
     title: c.name,
     metaHtml,
     excerpt: c.excerpt,
     body: c.body
   });
+  if (!sm) return card;
+  return `<div class="share-card-wrapper${checked ? ' selected' : ''}" onclick="toggleShareItem('command','${escapeAttr(c.name)}','${scope}',event)">
+    <label class="share-checkbox"><input type="checkbox" ${checked ? 'checked' : ''} onclick="event.stopPropagation();toggleShareItem('command','${escapeAttr(c.name)}','${scope}',event)"></label>
+    ${card}
+  </div>`;
 }
 
 // ─── Skills Tab (Enhanced) ────────────────────────────────────
@@ -1468,6 +1607,9 @@ function renderSkills() {
     </div>`;
   }
 
+  const sm       = State.shareMode;
+  const selCount = State.shareItems.size;
+
   return `<div>
     <div class="tab-header">
       <h2>Skills <span class="badge">${totalCount}</span></h2>
@@ -1475,10 +1617,12 @@ function renderSkills() {
         <input class="search-input" placeholder="Filter skills…"
                value="${escapeAttr(State.skillFilter)}"
                oninput="State.skillFilter=this.value;renderTabContent()">
+        <button class="btn-icon${sm ? ' active' : ''}" onclick="toggleShareMode()" title="${sm ? 'Cancel share' : 'Share skills'}">⇥ Share</button>
         <button class="btn-icon" onclick="openImportModal('skill')" title="Import">↑ Import</button>
         <button class="btn-icon" onclick="openBundleModal()" title="Export Bundle">↓ Export</button>
       </div>
     </div>
+    ${sm ? renderShareBar(selCount, 'skills') : ''}
     ${comparisonHtml}
     ${isProject && filteredLocal.length ? `
       <div class="skill-scope-label">Project Skills (${filteredLocal.length})</div>
@@ -1495,7 +1639,10 @@ function renderSkills() {
 }
 
 function renderSkillCard(skill, prefix, scope) {
-  const m = skill.meta || {};
+  const sm     = State.shareMode;
+  const key    = `skill:${scope}:${skill.name}`;
+  const checked = State.shareItems.has(key);
+  const m      = skill.meta || {};
   const safeId = (prefix + skill.name).replace(/[^a-z0-9_-]/gi, '_');
   const badges = [];
   if (m.userInvocable) badges.push('<span class="skill-badge invocable">user-invocable</span>');
@@ -1508,20 +1655,29 @@ function renderSkillCard(skill, prefix, scope) {
     ? `<div class="skill-tools-row">${m.allowedTools.map(t => `<span class="skill-tool-badge">${escapeHtml(t)}</span>`).join('')}</div>`
     : '';
 
-  return `<div class="skill-card" id="card-${safeId}">
-    <div class="skill-card-header" onclick="toggleSkillBody('${safeId}')">
+  const cardHtml = `<div class="skill-card" id="card-${safeId}">
+    <div class="skill-card-header" onclick="${sm ? `toggleShareItem('skill','${escapeAttr(skill.name)}','${scope}',event)` : `toggleSkillBody('${safeId}')`}">
       <div style="flex:1;min-width:0">
         <div class="skill-card-title">${escapeHtml(m.displayName || skill.name)}</div>
         ${m.description ? `<div class="skill-card-desc">${escapeHtml(m.description)}</div>` : `<div class="skill-card-desc">${escapeHtml(skill.excerpt)}</div>`}
       </div>
       <div class="skill-card-actions">
-        <button class="btn-icon" onclick="event.stopPropagation();exportSkill('${escapeAttr(skill.name)}','${scope}')" title="Export">↓</button>
+        ${sm ? '' : `
+        <button class="btn-icon card-share-btn" onclick="event.stopPropagation();shareItemDirect('skill','${escapeAttr(skill.name)}','${scope}')" title="Share to project">⇥</button>
+        <button class="btn-icon card-share-btn" onclick="event.stopPropagation();exportSkill('${escapeAttr(skill.name)}','${scope}')" title="Export">↓</button>
+        <button class="btn-icon card-share-btn card-delete-btn" onclick="event.stopPropagation();deleteSkill('${escapeAttr(skill.name)}','${scope}')" title="Delete skill">✕</button>`}
         <span style="font-size:11px;color:var(--text-muted)">${skill.wordCount}w</span>
       </div>
     </div>
     ${badges.length ? `<div class="skill-meta-row">${badges.join('')}</div>` : ''}
     ${toolsHtml}
     <div class="skill-card-body hidden" id="body-${safeId}" data-raw="${escapeAttr(skill.body)}"></div>
+  </div>`;
+
+  if (!sm) return cardHtml;
+  return `<div class="share-card-wrapper${checked ? ' selected' : ''}" onclick="toggleShareItem('skill','${escapeAttr(skill.name)}','${scope}',event)">
+    <label class="share-checkbox"><input type="checkbox" ${checked ? 'checked' : ''} onclick="event.stopPropagation();toggleShareItem('skill','${escapeAttr(skill.name)}','${scope}',event)"></label>
+    ${cardHtml}
   </div>`;
 }
 
@@ -1540,6 +1696,156 @@ function toggleSkillBody(id) {
     } catch { mdDiv.textContent = body.dataset.raw; }
     body.appendChild(mdDiv);
     attachCopyButtons(body);
+  }
+}
+
+// ─── Share Logic ──────────────────────────────────────────────
+
+function renderShareBar(selCount, type) {
+  return `<div class="share-action-bar">
+    <span class="share-action-label">${selCount > 0 ? `${selCount} ${type} selected` : `Select ${type} to share`}</span>
+    <div style="display:flex;gap:6px;margin-left:auto">
+      <button class="btn-secondary" onclick="selectAllShareItems('${type}')">Select All</button>
+      <button class="btn-primary" onclick="openShareModal()" ${selCount === 0 ? 'disabled' : ''}>Share to Project →</button>
+    </div>
+  </div>`;
+}
+
+function toggleShareMode() {
+  State.shareMode = !State.shareMode;
+  State.shareItems = new Map();
+  renderTabContent();
+}
+
+// Quick-share a single item without entering full share mode
+function shareItemDirect(type, name, scope) {
+  State.shareItems = new Map();
+  State.shareItems.set(`${type}:${scope}:${name}`, {
+    name, type, scope,
+    sourceProject: State.projectPath || null
+  });
+  openShareModal();
+}
+
+function toggleShareItem(type, name, scope, e) {
+  if (e) e.stopPropagation();
+  const key = `${type}:${scope}:${name}`;
+  if (State.shareItems.has(key)) {
+    State.shareItems.delete(key);
+  } else {
+    State.shareItems.set(key, { name, type, scope, sourceProject: State.projectPath || null });
+  }
+  renderTabContent();
+}
+
+function selectAllShareItems(tabType, scopeFilter) {
+  let type, globalList, localList;
+  if (tabType === 'skills') {
+    type = 'skill';
+    globalList = State.scan?.global?.skills || [];
+    localList  = State.scan?.project?.localSkills || [];
+  } else if (tabType === 'rule') {
+    type = 'rule';
+    globalList = State.scan?.global?.rules || [];
+    localList  = State.scan?.project?.localRules || [];
+  } else if (tabType === 'agent') {
+    type = 'agent';
+    globalList = State.scan?.global?.agents || [];
+    localList  = State.scan?.project?.localAgents || [];
+  } else {
+    type = 'command';
+    globalList = State.scan?.global?.commands || [];
+    localList  = State.scan?.project?.localCommands || [];
+  }
+
+  if (!scopeFilter || scopeFilter === 'global') {
+    globalList.forEach(item => {
+      const key = `${type}:global:${item.name}`;
+      State.shareItems.set(key, { name: item.name, type, scope: 'global', sourceProject: null });
+    });
+  }
+  if (!scopeFilter || scopeFilter === 'project') {
+    localList.forEach(item => {
+      const key = `${type}:project:${item.name}`;
+      State.shareItems.set(key, { name: item.name, type, scope: 'project', sourceProject: State.projectPath || null });
+    });
+  }
+  renderTabContent();
+}
+
+function openShareModal() {
+  if (State.shareItems.size === 0) return;
+  // Build project list: pinned + known, excluding current
+  const pinned  = State.pinnedProjects || [];
+  const known   = (State.scan?.global?.projects || []).filter(p => p.verified).map(p => p.decodedPath);
+  const allProjects = [...new Set([...pinned, ...known])].filter(p => p !== State.projectPath);
+
+  const el = document.getElementById('share-overlay');
+  if (!el) return;
+
+  const items = [...State.shareItems.values()];
+  const itemList = items.slice(0, 8).map(i =>
+    `<span class="share-item-chip">${escapeHtml(i.name)} <span class="share-item-type">${i.type}</span></span>`
+  ).join('') + (items.length > 8 ? `<span class="share-item-chip muted">+${items.length - 8} more</span>` : '');
+
+  document.getElementById('share-item-preview').innerHTML = itemList;
+  document.getElementById('share-target-select').innerHTML =
+    `<option value="">— pick a project —</option>` +
+    allProjects.map(p => `<option value="${escapeAttr(p)}">${escapeHtml(projectName(p))} <small>${escapeHtml(p)}</small></option>`).join('');
+
+  document.getElementById('share-confirm-btn').disabled = true;
+  document.getElementById('share-result').innerHTML = '';
+  el.classList.remove('hidden');
+}
+
+function closeShareModal() {
+  document.getElementById('share-overlay')?.classList.add('hidden');
+}
+
+function onShareTargetChange() {
+  const val = document.getElementById('share-target-select')?.value;
+  document.getElementById('share-confirm-btn').disabled = !val;
+}
+
+async function confirmShare() {
+  const targetProject = document.getElementById('share-target-select')?.value;
+  if (!targetProject) return;
+
+  const btn = document.getElementById('share-confirm-btn');
+  btn.disabled = true;
+  btn.textContent = 'Copying…';
+
+  const items = [...State.shareItems.values()];
+  try {
+    const result = await API.share(items, targetProject);
+    const resultEl = document.getElementById('share-result');
+    if (result.errors?.length) {
+      resultEl.innerHTML = `<span style="color:var(--accent-red)">⚠ ${result.errors.map(e => escapeHtml(e.name + ': ' + e.error)).join(', ')}</span>`;
+    }
+    if (result.copied?.length) {
+      resultEl.innerHTML += `<span style="color:var(--accent-green)">✓ Copied ${result.copied.length} item${result.copied.length > 1 ? 's' : ''} to ${escapeHtml(projectName(targetProject))}</span>`;
+      setTimeout(() => {
+        closeShareModal();
+        State.shareMode = false;
+        State.shareItems = new Map();
+        renderTabContent();
+      }, 1200);
+    }
+  } catch (e) {
+    document.getElementById('share-result').innerHTML = `<span style="color:var(--accent-red)">Error: ${escapeHtml(e.message)}</span>`;
+  }
+  btn.disabled = false;
+  btn.textContent = 'Copy to Project';
+}
+
+async function deleteSkill(name, scope) {
+  if (!confirm(`Delete skill "${name}"? This cannot be undone.`)) return;
+  const projectPath = scope === 'project' ? State.projectPath : null;
+  const result = await API.deleteSkill(name, scope, projectPath);
+  if (result.ok) {
+    doSilentRefresh();
+  } else {
+    alert('Delete failed: ' + (result.error || 'unknown error'));
   }
 }
 
@@ -1642,6 +1948,11 @@ function renderSettings() {
       ${hooksHtml || `<p style="font-size:12px;color:var(--text-muted)">No hooks configured</p>`}
     </div>
     ${localHtml}
+    ${proj?.claudeIgnore ? `
+  <div class="section">
+    <div class="section-title">.claudeignore</div>
+    <pre class="code-block" style="font-size:12px;max-height:200px;overflow-y:auto">${escapeHtml(proj.claudeIgnore)}</pre>
+  </div>` : ''}
   </div>`;
 }
 
@@ -2061,6 +2372,1103 @@ function getLang(p) {
   if (p.endsWith('.js'))   return 'javascript';
   if (p.endsWith('.php'))  return 'php';
   return 'plaintext';
+}
+
+// ─── Editor Tab ───────────────────────────────────────────────
+
+function renderEditor() {
+  // Trigger tree load if not yet loaded for this context
+  if (!State.editorFileTree && !State.editorFileTreeLoading) {
+    loadEditorTree();
+  }
+
+  const treeData = State.editorFileTree;
+  const filename = State.editorPath ? State.editorPath.split('/').pop() : null;
+  const dirtyMark = State.editorDirty ? '<span class="editor-dirty" title="Unsaved changes"> ●</span>' : '';
+
+  const toolbar = State.editorPath ? `
+    <div class="editor-toolbar">
+      <span class="editor-filename">${escapeHtml(filename)}${dirtyMark}</span>
+      <span class="editor-lang-badge">${escapeHtml(getLangForMonaco(State.editorPath))}</span>
+      <div style="margin-left:auto;display:flex;gap:6px">
+        <button class="btn-secondary" onclick="saveEditorFile()" title="Save (⌘S)">Save</button>
+      </div>
+    </div>` : `
+    <div class="editor-toolbar">
+      <span style="color:var(--text-muted);font-size:12px">Select a file from the tree to edit</span>
+    </div>`;
+
+  const treeHtml = State.editorFileTreeLoading
+    ? `<div style="padding:12px;font-size:12px;color:var(--text-muted)"><div class="spinner" style="width:14px;height:14px;margin-bottom:6px"></div>Loading…</div>`
+    : treeData
+      ? renderEditorTree(treeData)
+      : `<div style="padding:12px;font-size:12px;color:var(--text-muted)">No files found</div>`;
+
+  const tree = `<div class="file-tree" id="editor-file-tree">${treeHtml}</div>`;
+
+  return `<div class="editor-pane">
+    ${tree}
+    <div class="editor-right">
+      ${toolbar}
+      <div id="monaco-container" class="monaco-container"></div>
+    </div>
+  </div>`;
+}
+
+async function loadEditorTree() {
+  const isProject = State.mode === 'project' && State.projectPath;
+  const rootPath  = isProject ? State.projectPath : null;
+  const queryPath = rootPath || (State.scan?.global?.fileTree?.path) || null;
+  if (!queryPath) {
+    // Fall back to the global fileTree from scan
+    State.editorFileTree = State.scan?.global?.fileTree || null;
+    renderTabContent();
+    return;
+  }
+  State.editorFileTreeLoading = true;
+  renderTabContent();
+  try {
+    const data = await API.fileTree(queryPath, rootPath);
+    State.editorFileTree = data.tree || null;
+  } catch {
+    // Fall back to global tree on error
+    State.editorFileTree = State.scan?.global?.fileTree || null;
+  }
+  State.editorFileTreeLoading = false;
+  renderTabContent();
+}
+
+function renderEditorTree(node, depth = 0) {
+  if (!node) return '';
+  const indent = depth * 12;
+  if (!node.isDir) {
+    const active = State.editorPath === node.path ? ' active' : '';
+    return `<div class="editor-tree-file${active}" style="padding-left:${8 + indent}px" onclick="openEditorFile('${escapeAttr(node.path)}')" title="${escapeAttr(node.path)}">
+      <span style="opacity:.5;font-size:10px">◻</span> ${escapeHtml(node.name)}
+    </div>`;
+  }
+  // Directory
+  const expanded = State.fileTreeExpanded.has(node.path);
+  const children = expanded && node.children?.length
+    ? node.children.map(c => renderEditorTree(c, depth + 1)).join('')
+    : '';
+  return `<div>
+    <div class="editor-tree-dir" style="padding-left:${8 + indent}px;padding:4px 8px 4px ${8 + indent}px;font-size:12px;cursor:pointer;color:var(--text-secondary);display:flex;align-items:center;gap:4px" onclick="onTreeToggle('${escapeAttr(node.path)}')">
+      <span style="font-size:9px">${expanded ? '▼' : '▶'}</span>
+      <span style="opacity:.6;font-size:11px">📁</span> <strong>${escapeHtml(node.name)}</strong>
+    </div>
+    ${expanded ? `<div>${children}</div>` : ''}
+  </div>`;
+}
+
+function getLangForMonaco(p) {
+  if (!p) return 'plaintext';
+  if (p.endsWith('.json') || p.endsWith('.jsonl')) return 'json';
+  if (p.endsWith('.md'))   return 'markdown';
+  if (p.endsWith('.sh'))   return 'shell';
+  if (p.endsWith('.js'))   return 'javascript';
+  if (p.endsWith('.ts'))   return 'typescript';
+  if (p.endsWith('.php'))  return 'php';
+  if (p.endsWith('.yaml') || p.endsWith('.yml')) return 'yaml';
+  return 'plaintext';
+}
+
+function initMonaco() {
+  const container = document.getElementById('monaco-container');
+  if (!container) return;
+
+  const monacoBase = 'https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs';
+
+  const doCreate = () => {
+    if (window._monacoEditor) {
+      // Already created — just update layout
+      window._monacoEditor.layout();
+      return;
+    }
+    window._monacoEditor = monaco.editor.create(container, {
+      value: '',
+      language: getLangForMonaco(State.editorPath),
+      theme: State.theme === 'dark' ? 'vs-dark' : 'vs',
+      automaticLayout: true,
+      fontSize: 13,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      wordWrap: 'on',
+    });
+
+    window._monacoEditor.addCommand(
+      monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS,
+      () => saveEditorFile()
+    );
+
+    window._monacoEditor.onDidChangeModelContent(() => {
+      if (!State.editorDirty) {
+        State.editorDirty = true;
+        // Update toolbar dirty indicator without full re-render
+        const fn = document.querySelector('.editor-filename');
+        if (fn && !fn.querySelector('.editor-dirty')) {
+          fn.insertAdjacentHTML('beforeend', '<span class="editor-dirty"> ●</span>');
+        }
+      }
+    });
+
+    if (State.editorPath) _loadFileIntoMonaco(State.editorPath);
+  };
+
+  // If Monaco instance exists but container was re-created (tab re-render), dispose and recreate
+  if (window._monacoEditor) {
+    const oldContainer = window._monacoEditor.getContainerDomNode();
+    if (oldContainer !== container) {
+      window._monacoEditor.dispose();
+      window._monacoEditor = null;
+    }
+  }
+
+  if (window.monaco) {
+    doCreate();
+    return;
+  }
+
+  // Load Monaco via AMD loader
+  require.config({ paths: { vs: monacoBase } });
+  require(['vs/editor/editor.main'], doCreate);
+}
+
+const BINARY_EXTENSIONS = new Set([
+  'zip','gz','tar','tgz','bz2','xz','7z','rar',
+  'png','jpg','jpeg','gif','webp','svg','ico','bmp','tiff',
+  'pdf','doc','docx','xls','xlsx','ppt','pptx',
+  'mp3','mp4','wav','ogg','flac','mov','avi','mkv','webm',
+  'exe','dll','so','dylib','bin','dmg','pkg','deb','rpm',
+  'woff','woff2','ttf','otf','eot',
+  'pyc','class','o','a',
+]);
+
+function isEditableFile(filePath) {
+  const ext = (filePath.split('.').pop() || '').toLowerCase();
+  return !BINARY_EXTENSIONS.has(ext);
+}
+
+async function openEditorFile(filePath) {
+  if (!isEditableFile(filePath)) {
+    if (window._monacoEditor) {
+      const model = window._monacoEditor.getModel();
+      if (model) monaco.editor.setModelLanguage(model, 'plaintext');
+      window._monacoEditor.setValue(`// Cannot open binary file: ${filePath.split('/').pop()}`);
+      window._monacoEditor.updateOptions({ readOnly: true });
+    }
+    State.editorPath  = filePath;
+    State.editorDirty = false;
+    // Update toolbar filename only
+    const fn = document.querySelector('.editor-filename');
+    if (fn) fn.innerHTML = escapeHtml(filePath.split('/').pop()) + ' <span style="color:var(--accent-orange);font-size:11px">(binary)</span>';
+    return;
+  }
+  if (State.editorDirty) {
+    if (!confirm('You have unsaved changes. Discard and open new file?')) return;
+  }
+  State.editorPath  = filePath;
+  State.editorDirty = false;
+
+  if (window._monacoEditor) {
+    // Monaco already mounted — update in-place, no full re-render needed
+    await _loadFileIntoMonaco(filePath);
+    // Update toolbar and active state in tree
+    const fn = document.querySelector('.editor-filename');
+    if (fn) fn.innerHTML = escapeHtml(filePath.split('/').pop());
+    const langBadge = document.querySelector('.editor-lang-badge');
+    if (langBadge) langBadge.textContent = getLangForMonaco(filePath);
+    document.querySelectorAll('.editor-tree-file').forEach(el => el.classList.remove('active'));
+    document.querySelectorAll('.editor-tree-file').forEach(el => {
+      if (el.getAttribute('onclick')?.includes(escapeAttr(filePath))) el.classList.add('active');
+    });
+  } else {
+    renderTabContent();
+  }
+}
+
+async function _loadFileIntoMonaco(filePath) {
+  if (!window._monacoEditor) return;
+  try {
+    const data = await API.file(filePath, State.projectPath || null);
+    const model = window._monacoEditor.getModel();
+    if (model) monaco.editor.setModelLanguage(model, getLangForMonaco(filePath));
+    window._monacoEditor.updateOptions({ readOnly: false });
+    window._monacoEditor.setValue(data.content || '');
+    State.editorDirty = false;
+  } catch (e) {
+    window._monacoEditor.setValue(`// Error loading file: ${e.message}`);
+  }
+}
+
+async function reloadEditorFile() {
+  if (window._monacoEditor && State.editorPath) {
+    await _loadFileIntoMonaco(State.editorPath);
+  }
+}
+
+async function saveEditorFile() {
+  if (!window._monacoEditor || !State.editorPath) return;
+  const content = window._monacoEditor.getValue();
+  try {
+    const result = await API.saveFile(State.editorPath, content, State.projectPath || null);
+    if (result.ok) {
+      State.editorDirty = false;
+      const dirty = document.querySelector('.editor-dirty');
+      if (dirty) dirty.remove();
+    } else {
+      alert('Save failed: ' + (result.error || 'Unknown error'));
+    }
+  } catch (e) {
+    alert('Save failed: ' + e.message);
+  }
+}
+
+// ─── Rules Tab ────────────────────────────────────────────────────────────────
+
+function renderRules() {
+  const g    = State.scan?.global;
+  const proj = State.scan?.project;
+  const globalRules  = g?.rules  || [];
+  const localRules   = proj?.localRules || [];
+  const isProject    = State.mode === 'project';
+  const selCount     = State.shareItems.size;
+
+  function ruleCard(rule, scope) {
+    const key     = `rule:${scope}:${rule.name}`;
+    const checked = State.shareItems.has(key);
+    const pathBadges = (rule.paths || []).map(p =>
+      `<span class="rule-path-badge">${escapeHtml(p)}</span>`
+    ).join('');
+
+    const shareBtn  = `<button class="card-share-btn btn-ghost" onclick="shareItemDirect('rule','${escapeAttr(rule.name)}','${scope}')" title="Share to project">⇥</button>`;
+    const deleteBtn = `<button class="card-delete-btn btn-ghost" onclick="deleteRule('${escapeAttr(rule.name)}','${scope}')" title="Delete rule">✕</button>`;
+
+    const shareWrap = State.shareMode
+      ? `<label class="share-checkbox"><input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleShareItem('rule','${escapeAttr(rule.name)}','${scope}')"></label>`
+      : '';
+
+    const id = `rule_${scope}_${rule.name.replace(/[^a-z0-9]/gi,'_')}`;
+    return `<div class="card ${State.shareMode && checked ? 'share-card-wrapper selected' : State.shareMode ? 'share-card-wrapper' : ''}" id="card-${id}">
+      ${shareWrap}
+      <div class="card-header" onclick="toggleCard('${id}')">
+        <span class="card-title">${escapeHtml(rule.name)}</span>
+        <div class="card-meta">
+          ${pathBadges}
+          ${rule.wordCount ? `<span class="skill-badge">${rule.wordCount}w</span>` : ''}
+          ${!State.shareMode ? shareBtn + deleteBtn : ''}
+        </div>
+        <span class="expand-icon">▶</span>
+      </div>
+      <div class="card-excerpt">${escapeHtml(rule.excerpt || '')}</div>
+      <div class="card-body hidden" id="body-${id}" data-raw="${escapeAttr(rule.body || rule.raw || '')}"></div>
+    </div>`;
+  }
+
+  const shareModeBar = isProject ? `
+    <div class="share-action-bar">
+      <button class="btn-ghost ${State.shareMode ? 'active' : ''}" onclick="toggleShareMode()">
+        ${State.shareMode ? '✕ Cancel' : '⇥ Share mode'}
+      </button>
+      ${State.shareMode ? `
+        <button class="btn-ghost" onclick="selectAllShareItems('rule', 'global')">Select all global</button>
+        ${proj ? `<button class="btn-ghost" onclick="selectAllShareItems('rule', 'project')">Select all project</button>` : ''}
+        <button class="btn-primary" onclick="openShareModal()" ${selCount ? '' : 'disabled'}>Share ${selCount || ''}</button>
+      ` : ''}
+    </div>` : '';
+
+  const localSection = isProject && proj
+    ? `<div class="section">
+        <div class="section-title">Project Rules — ${escapeHtml(proj.projectName)} (${localRules.length})</div>
+        ${localRules.length
+          ? localRules.map(r => ruleCard(r, 'project')).join('')
+          : `<p class="empty-hint">No rules in .claude/rules/</p>`}
+      </div>` : '';
+
+  return `<div>
+    ${shareModeBar}
+    ${localSection}
+    <div class="section">
+      <div class="section-title">Global Rules — ~/.claude/rules/ (${globalRules.length})</div>
+      ${globalRules.length
+        ? globalRules.map(r => ruleCard(r, 'global')).join('')
+        : `<p class="empty-hint">No global rules found</p>`}
+    </div>
+  </div>`;
+}
+
+async function deleteRule(name, scope) {
+  if (!confirm(`Delete rule "${name}"? This cannot be undone.`)) return;
+  const r = await API.deleteRule(name, scope, State.projectPath || null);
+  if (!r.ok) { alert('Error: ' + r.error); return; }
+  await doSilentRefresh();
+}
+
+// ─── Hooks Tab ────────────────────────────────────────────────────────────────
+
+function renderHooks() {
+  const g    = State.scan?.global;
+  const proj = State.scan?.project;
+  const isProject = State.mode === 'project';
+
+  const globalHooksRaw   = g?.settings?.hooksRaw    || {};
+  const projectHooksRaw  = proj?.settings?.hooksRaw  || {};
+  const localHooksRaw    = proj?.settingsLocal?.hooksRaw || {};
+  const warpHooks        = g?.plugins?.warpPlugin?.hooks || {};
+
+  function hookTypeIcon(type) {
+    return { command: '⌘', http: '⇆', prompt: '◷', agent: '◎' }[type] || '•';
+  }
+
+  function hookEntry(event, entry, source) {
+    const hooks = entry.hooks || [];
+    return hooks.map(h => {
+      const typeLabel = h.type || 'command';
+      const detail = typeLabel === 'http' ? (h.url || '') : typeLabel === 'command' ? (h.command || '') : (h.prompt || h.command || '');
+      const raw = JSON.stringify({ [event]: [{ matcher: entry.matcher || undefined, hooks: [h] }] }, null, 2);
+      return `<div class="hook-card">
+        <div class="hook-card-header">
+          <span class="hook-event-badge">${escapeHtml(event)}</span>
+          <span class="hook-type-badge hook-type-${escapeAttr(typeLabel)}">${hookTypeIcon(typeLabel)} ${escapeHtml(typeLabel)}</span>
+          <span class="hook-source-badge">${escapeHtml(source)}</span>
+          <button class="btn-ghost" style="margin-left:auto;font-size:11px" onclick="copyHookJson(${escapeAttr(JSON.stringify(raw))})" title="Copy hook JSON">⧉ Copy JSON</button>
+        </div>
+        ${entry.matcher ? `<div class="hook-detail"><span class="hook-detail-key">Matcher</span><span class="hook-detail-value mono">${escapeHtml(entry.matcher)}</span></div>` : ''}
+        <div class="hook-detail"><span class="hook-detail-key">${typeLabel === 'http' ? 'URL' : 'Command'}</span><span class="hook-detail-value mono">${escapeHtml(detail)}</span></div>
+        ${h.timeout ? `<div class="hook-detail"><span class="hook-detail-key">Timeout</span><span class="hook-detail-value">${h.timeout}s</span></div>` : ''}
+        ${h.statusMessage ? `<div class="hook-detail"><span class="hook-detail-key">Status</span><span class="hook-detail-value">${escapeHtml(h.statusMessage)}</span></div>` : ''}
+        ${h.async ? `<div class="hook-detail"><span class="hook-detail-key">Async</span><span class="hook-detail-value">yes</span></div>` : ''}
+      </div>`;
+    }).join('');
+  }
+
+  function renderHookGroup(hooksObj, source) {
+    if (!Object.keys(hooksObj).length) return '';
+    return Object.entries(hooksObj).map(([event, entries]) =>
+      entries.map(entry => hookEntry(event, entry, source)).join('')
+    ).join('');
+  }
+
+  const globalHtml   = renderHookGroup(globalHooksRaw, 'global settings.json');
+  const warpHtml     = renderHookGroup(warpHooks, 'warp plugin');
+  const projectHtml  = isProject ? renderHookGroup(projectHooksRaw, '.claude/settings.json') : '';
+  const localHtml    = isProject ? renderHookGroup(localHooksRaw, '.claude/settings.local.json') : '';
+
+  const hasAny = globalHtml || warpHtml || projectHtml || localHtml;
+
+  return `<div>
+    <div class="section">
+      <div class="section-title" style="display:flex;align-items:center;gap:8px">
+        Hooks
+        <span style="font-size:11px;color:var(--text-muted);font-weight:400">Hooks are defined in settings.json — copy JSON to add to another project</span>
+      </div>
+      ${isProject && (projectHtml || localHtml) ? `
+        <div class="hooks-source-group">
+          <div class="hooks-source-label">Project (.claude/settings.json + settings.local.json)</div>
+          ${projectHtml || localHtml || '<p class="empty-hint">No hooks in project settings</p>'}
+        </div>` : ''}
+      <div class="hooks-source-group">
+        <div class="hooks-source-label">Global (~/.claude/settings.json)</div>
+        ${globalHtml || '<p class="empty-hint">No hooks in global settings</p>'}
+      </div>
+      ${warpHtml ? `<div class="hooks-source-group">
+        <div class="hooks-source-label">Warp Plugin</div>
+        ${warpHtml}
+      </div>` : ''}
+      ${!hasAny ? `<p class="empty-hint">No hooks configured. Add them to settings.json under the "hooks" key.</p>` : ''}
+    </div>
+  </div>`;
+}
+
+function copyHookJson(raw) {
+  navigator.clipboard.writeText(raw).then(() => {
+    const el = document.createElement('div');
+    el.textContent = 'Hook JSON copied!';
+    el.style.cssText = 'position:fixed;bottom:20px;right:20px;background:var(--bg-elevated);border:1px solid var(--bg-border);padding:8px 14px;border-radius:6px;font-size:12px;z-index:9999;color:var(--text-primary)';
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 2000);
+  });
+}
+
+// ─── Agents Tab ───────────────────────────────────────────────────────────────
+
+function renderAgents() {
+  const g    = State.scan?.global;
+  const proj = State.scan?.project;
+  const globalAgents = g?.agents  || [];
+  const localAgents  = proj?.localAgents || [];
+  const isProject    = State.mode === 'project';
+  const selCount     = State.shareItems.size;
+
+  function agentCard(agent, scope) {
+    const key     = `agent:${scope}:${agent.name}`;
+    const checked = State.shareItems.has(key);
+    const meta    = agent.meta || {};
+
+    const shareBtn  = `<button class="card-share-btn btn-ghost" onclick="shareItemDirect('agent','${escapeAttr(agent.name)}','${scope}')" title="Share to project">⇥</button>`;
+    const deleteBtn = `<button class="card-delete-btn btn-ghost" onclick="deleteAgent('${escapeAttr(agent.name)}','${scope}')" title="Delete agent">✕</button>`;
+
+    const shareWrap = State.shareMode
+      ? `<label class="share-checkbox"><input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleShareItem('agent','${escapeAttr(agent.name)}','${scope}')"></label>`
+      : '';
+
+    const id = `agent_${scope}_${agent.name.replace(/[^a-z0-9]/gi,'_')}`;
+    const allowedBadges = (meta.allowedTools || []).map(t =>
+      `<span class="skill-tool-badge">${escapeHtml(t)}</span>`
+    ).join('');
+
+    return `<div class="card ${State.shareMode && checked ? 'share-card-wrapper selected' : State.shareMode ? 'share-card-wrapper' : ''}" id="card-${id}">
+      ${shareWrap}
+      <div class="card-header" onclick="toggleCard('${id}')">
+        <span class="card-title">${escapeHtml(meta.displayName || agent.name)}</span>
+        <div class="card-meta">
+          ${allowedBadges}
+          ${meta.description ? `<span class="skill-badge">${escapeHtml(meta.description.slice(0,40))}</span>` : ''}
+          ${!State.shareMode ? shareBtn + deleteBtn : ''}
+        </div>
+        <span class="expand-icon">▶</span>
+      </div>
+      <div class="card-excerpt">${escapeHtml(agent.excerpt || '')}</div>
+      <div class="card-body hidden" id="body-${id}" data-raw="${escapeAttr(agent.body || agent.raw || '')}"></div>
+    </div>`;
+  }
+
+  const shareModeBar = isProject ? `
+    <div class="share-action-bar">
+      <button class="btn-ghost ${State.shareMode ? 'active' : ''}" onclick="toggleShareMode()">
+        ${State.shareMode ? '✕ Cancel' : '⇥ Share mode'}
+      </button>
+      ${State.shareMode ? `
+        <button class="btn-ghost" onclick="selectAllShareItems('agent', 'global')">Select all global</button>
+        ${proj ? `<button class="btn-ghost" onclick="selectAllShareItems('agent', 'project')">Select all project</button>` : ''}
+        <button class="btn-primary" onclick="openShareModal()" ${selCount ? '' : 'disabled'}>Share ${selCount || ''}</button>
+      ` : ''}
+    </div>` : '';
+
+  const localSection = isProject && proj
+    ? `<div class="section">
+        <div class="section-title">Project Agents — ${escapeHtml(proj.projectName)} (${localAgents.length})</div>
+        ${localAgents.length
+          ? localAgents.map(a => agentCard(a, 'project')).join('')
+          : `<p class="empty-hint">No agents in .claude/agents/</p>`}
+      </div>` : '';
+
+  return `<div>
+    ${shareModeBar}
+    ${localSection}
+    <div class="section">
+      <div class="section-title">Global Agents — ~/.claude/agents/ (${globalAgents.length})</div>
+      ${globalAgents.length
+        ? globalAgents.map(a => agentCard(a, 'global')).join('')
+        : `<p class="empty-hint">No global agents found</p>`}
+    </div>
+  </div>`;
+}
+
+async function deleteAgent(name, scope) {
+  if (!confirm(`Delete agent "${name}"? This cannot be undone.`)) return;
+  const r = await API.deleteAgent(name, scope, State.projectPath || null);
+  if (!r.ok) { alert('Error: ' + r.error); return; }
+  await doSilentRefresh();
+}
+
+// ─── Git Tab ──────────────────────────────────────────────────
+
+async function loadGitTab() {
+  if (State.gitStatusLoading) return;
+  State.gitStatusLoading = true;
+  renderTabContent();
+
+  try {
+    const r = await API.gitIsRepo(State.projectPath);
+    State.gitIsRepo = r.isRepo;
+  } catch { State.gitIsRepo = false; }
+
+  if (!State.gitIsRepo) {
+    State.gitStatusLoading = false;
+    renderTabContent();
+    return;
+  }
+
+  const [status, log, worktrees, remotes, branches] = await Promise.allSettled([
+    API.gitStatus(State.projectPath),
+    API.gitLog(State.projectPath),
+    API.gitWorktrees(State.projectPath),
+    API.gitRemotes(State.projectPath),
+    API.gitBranches(State.projectPath),
+  ]);
+  State.gitStatus    = status.value    || null;
+  State.gitLog       = log.value       || null;
+  State.gitWorktrees = worktrees.value || null;
+  State.gitRemotes   = remotes.value   || null;
+  State.gitBranches  = branches.value  || null;
+  State.gitStatusLoading = false;
+  renderTabContent();
+  renderTabBar(); // update badge
+}
+
+function renderGit() {
+  if (State.gitStatusLoading) return renderLoading();
+  if (State.gitIsRepo === false) {
+    return `<div class="empty-state"><div class="empty-state-icon">⎇</div><h3>Not a git repository</h3><p>This folder is not tracked by git.</p></div>`;
+  }
+  if (!State.gitStatus) {
+    return renderLoading();
+  }
+
+  return `<div class="git-wrap">
+    ${renderGitHeader()}
+    <div class="git-layout">
+      <div class="git-left">
+        ${renderGitFileList()}
+        ${renderGitCommitForm()}
+      </div>
+      <div class="git-right" id="git-diff-panel">
+        ${State.gitDiffLoading ? '<div class="git-diff-hint"><div class="spinner"></div></div>' : (State.gitDiff ? renderGitDiff() : renderGitDiffHint())}
+      </div>
+    </div>
+    ${renderGitHistory()}
+    ${renderGitWorktrees()}
+    <div id="git-op-result" class="git-op-result"></div>
+  </div>`;
+}
+
+function renderGitHeader() {
+  const s      = State.gitStatus;
+  const current = s?.branch || '';
+  const ahead  = s?.ahead  || 0;
+  const behind = s?.behind || 0;
+  const syncHtml = (ahead || behind)
+    ? `<span class="git-sync">${behind > 0 ? `↓${behind} ` : ''}${ahead > 0 ? `↑${ahead}` : ''}</span>`
+    : '';
+
+  const hasPR = (() => {
+    const url = State.gitRemotes?.remotes?.[0]?.url || '';
+    return /github\.com|gitlab\.com/.test(url);
+  })();
+
+  // Build branch select — local branches first, then remotes
+  const allBranches = State.gitBranches?.branches || [];
+  const local  = allBranches.filter(b => !b.startsWith('origin/') && !b.startsWith('remotes/'));
+  const remote = allBranches.filter(b => b.startsWith('remotes/') || b.startsWith('origin/'));
+
+  const branchOptions = local.length
+    ? `<optgroup label="Local">${local.map(b =>
+        `<option value="${escapeAttr(b)}" ${b === current ? 'selected' : ''}>${escapeHtml(b)}</option>`
+      ).join('')}</optgroup>
+       ${remote.length ? `<optgroup label="Remote">${remote.map(b =>
+        `<option value="${escapeAttr(b)}">${escapeHtml(b)}</option>`
+      ).join('')}</optgroup>` : ''}`
+    : `<option value="${escapeAttr(current)}" selected>${escapeHtml(current || 'unknown')}</option>`;
+
+  return `<div class="git-header">
+    <span style="font-size:12px;color:var(--text-muted);flex-shrink:0">⎇</span>
+    <select class="git-branch-select" onchange="gitCheckoutBranch(this.value)" title="Switch branch">
+      ${branchOptions}
+    </select>
+    ${syncHtml}
+    <button class="btn-secondary" onclick="gitPull()" style="font-size:12px;padding:3px 10px">Pull</button>
+    <button class="btn-secondary" onclick="gitPush()" style="font-size:12px;padding:3px 10px">Push</button>
+    ${hasPR ? `<button class="btn-secondary" onclick="gitOpenPR()" style="font-size:12px;padding:3px 10px">Open PR ↗</button>` : ''}
+    <button class="btn-ghost" onclick="loadGitTab()" title="Refresh" style="margin-left:auto">↺ Refresh</button>
+  </div>`;
+}
+
+function renderGitFileList() {
+  const files = State.gitStatus?.files || [];
+  const staged   = files.filter(f => f.staged);
+  const unstaged = files.filter(f => !f.staged);
+
+  function fileRow(f) {
+    const isActive = State.gitSelectedFile?.path === f.path && State.gitSelectedFile?.staged === f.staged;
+    const statusChar = f.staged ? (f.x || '?') : (f.y || '?');
+    const cls = { M:'M', A:'A', D:'D', R:'R' }[statusChar] || 'u';
+    const checked = f.staged;
+    return `<div class="git-file-row ${isActive ? 'active' : ''}" onclick="gitSelectFile('${escapeAttr(f.path)}', ${f.staged})">
+      <input type="checkbox" ${checked ? 'checked' : ''} onclick="event.stopPropagation();gitToggleStage('${escapeAttr(f.path)}', ${f.staged})" style="flex-shrink:0;cursor:pointer">
+      <span class="git-status-${cls}">${escapeHtml(statusChar)}</span>
+      <span class="git-file-name" title="${escapeAttr(f.path)}">${escapeHtml(f.path)}</span>
+      ${!f.staged && statusChar !== '?' ? `<button class="git-discard-btn btn-ghost" onclick="event.stopPropagation();gitDiscard('${escapeAttr(f.path)}')" title="Discard changes">✕</button>` : ''}
+    </div>`;
+  }
+
+  return `<div class="git-file-list">
+    ${unstaged.length ? `<div class="git-section-label">Unstaged (${unstaged.length})</div>${unstaged.map(fileRow).join('')}` : ''}
+    ${staged.length   ? `<div class="git-section-label">Staged (${staged.length})</div>${staged.map(fileRow).join('')}` : ''}
+    ${!files.length   ? `<div class="git-diff-hint" style="padding:20px">No changes</div>` : ''}
+  </div>`;
+}
+
+function renderGitCommitForm() {
+  const hasStaged = (State.gitStatus?.files || []).some(f => f.staged);
+  return `<div class="git-commit-form">
+    <input class="git-commit-input" type="text" placeholder="Summary (required)"
+      value="${escapeAttr(State.gitCommitSummary)}"
+      oninput="State.gitCommitSummary=this.value"
+      onkeydown="if(event.key==='Enter')gitCommit()">
+    <button class="btn-primary" onclick="gitCommit()" ${hasStaged ? '' : 'disabled'}
+      style="font-size:12px;padding:5px 12px">
+      Commit to ${escapeHtml(State.gitStatus?.branch || 'main')}
+    </button>
+  </div>`;
+}
+
+function renderGitDiffHint() {
+  return `<div class="git-diff-hint">Click a file to see its diff</div>`;
+}
+
+function renderGitDiff() {
+  const raw = State.gitDiff || '';
+  const lines = raw.split('\n').map(line => {
+    if (line.startsWith('+++') || line.startsWith('---')) {
+      return `<span class="git-diff-meta">${escapeHtml(line)}</span>`;
+    }
+    if (line.startsWith('+')) return `<span class="git-diff-add">${escapeHtml(line)}</span>`;
+    if (line.startsWith('-')) return `<span class="git-diff-del">${escapeHtml(line)}</span>`;
+    if (line.startsWith('@@')) return `<span class="git-diff-hunk">${escapeHtml(line)}</span>`;
+    return `<span class="git-diff-meta">${escapeHtml(line)}</span>`;
+  });
+  const f = State.gitSelectedFile;
+  return `<div style="padding:8px 12px;border-bottom:1px solid var(--bg-border);font-size:11px;font-family:var(--font-mono);color:var(--text-muted)">${escapeHtml(f?.path || '')}</div>
+  <div class="git-diff">${lines.join('\n')}</div>`;
+}
+
+function renderGitHistory() {
+  const commits = State.gitLog?.commits || [];
+  const open = State.gitLogExpanded ? 'open' : '';
+  return `<details class="git-section-details" ${open} ontoggle="State.gitLogExpanded=this.open">
+    <summary class="git-section-summary">History (${commits.length} commits)</summary>
+    <div class="git-history-list">
+      ${commits.map(c => `
+        <div class="git-commit-row">
+          <span class="git-commit-hash">${escapeHtml((c.hash||'').slice(0,7))}</span>
+          <span class="git-commit-msg">${escapeHtml(c.subject || '')}</span>
+          <span class="git-commit-meta">${escapeHtml(c.author || '')} · ${escapeHtml(c.date || '')}</span>
+        </div>`).join('')}
+      ${!commits.length ? '<div style="padding:10px 14px;color:var(--text-muted);font-size:12px">No commits</div>' : ''}
+    </div>
+  </details>`;
+}
+
+function renderGitWorktrees() {
+  const wts = State.gitWorktrees?.worktrees || [];
+  const open = State.gitWorktreesExpanded ? 'open' : '';
+  return `<details class="git-section-details" ${open} ontoggle="State.gitWorktreesExpanded=this.open">
+    <summary class="git-section-summary">Worktrees (${wts.length})</summary>
+    <div>
+      ${wts.map(wt => `
+        <div class="git-worktree-row">
+          <span class="git-branch ${wt.isMain ? 'git-worktree-current' : ''}">⎇ ${escapeHtml(wt.branch || '(detached)')}</span>
+          <span style="flex:1;color:var(--text-muted);font-size:11px">${escapeHtml(wt.path)}</span>
+          ${!wt.isMain ? `
+            <button class="btn-ghost" style="font-size:11px" onclick="selectProject('${escapeAttr(wt.path)}')">Open</button>
+            <button class="btn-ghost" style="font-size:11px;color:var(--accent-red,#f85149)" onclick="gitRemoveWorktree('${escapeAttr(wt.path)}')">Remove</button>
+          ` : '<span style="font-size:11px;color:var(--text-muted)">(main)</span>'}
+        </div>`).join('')}
+      <div class="git-worktree-add-form">
+        <input id="git-wt-branch" class="git-commit-input" placeholder="Branch name" style="flex:1">
+        <input id="git-wt-path"   class="git-commit-input" placeholder="Worktree path (absolute)" style="flex:2">
+        <label class="git-wt-existing-label" title="Check if the branch already exists">
+          <input type="checkbox" id="git-wt-existing"> existing
+        </label>
+        <button class="btn-secondary" onclick="gitAddWorktree()" style="font-size:12px;padding:4px 10px;flex-shrink:0">+ Add Worktree</button>
+      </div>
+    </div>
+  </details>`;
+}
+
+// ── Git event handlers ─────────────────────────────────────────
+
+async function refreshGitStatus() {
+  try {
+    const r = await API.gitStatus(State.projectPath);
+    State.gitStatus = r;
+  } catch (e) {
+    console.error('git status error', e);
+  }
+  renderTabContent();
+  renderTabBar();
+}
+
+async function gitCheckoutBranch(branch) {
+  if (!branch || branch === State.gitStatus?.branch) return;
+  const uncommitted = (State.gitStatus?.files || []).length;
+  if (uncommitted > 0) {
+    if (!confirm(`You have ${uncommitted} uncommitted change(s). Switch to "${branch}" anyway?`)) {
+      renderTabContent(); // re-render to reset the select back to current
+      return;
+    }
+  }
+  showGitOpResult(`Switching to ${branch}…`);
+  try {
+    const r = await API.gitCheckout(State.projectPath, branch);
+    if (!r.ok) { showGitOpResult('✗ ' + r.error, false); renderTabContent(); return; }
+    showGitOpResult(`✓ Switched to ${branch}`, true);
+    // Full reload: new branch may have different files, log, etc.
+    State.gitStatus = null;
+    State.gitBranches = null;
+    State.gitLog = null;
+    State.gitDiff = null;
+    State.gitSelectedFile = null;
+    await loadGitTab();
+  } catch (e) {
+    showGitOpResult('✗ ' + e.message, false);
+    renderTabContent();
+  }
+}
+
+async function gitToggleStage(filePath, isStaged) {
+  try {
+    if (isStaged) await API.gitUnstage(State.projectPath, [filePath]);
+    else          await API.gitStage(State.projectPath, [filePath]);
+  } catch (e) { console.error(e); }
+  await refreshGitStatus();
+}
+
+async function gitSelectFile(filePath, staged) {
+  State.gitSelectedFile = { path: filePath, staged };
+  State.gitDiff = null;
+  State.gitDiffLoading = true;
+  renderTabContent();
+  try {
+    const r = await API.gitDiff(State.projectPath, filePath, staged);
+    State.gitDiff = r.diff;
+  } catch (e) { State.gitDiff = `Error: ${e.message}`; }
+  State.gitDiffLoading = false;
+  renderTabContent();
+}
+
+async function gitDiscard(filePath) {
+  if (!confirm(`Discard changes to ${filePath}? This cannot be undone.`)) return;
+  try {
+    await API.gitDiscard(State.projectPath, filePath);
+  } catch (e) { alert(`Error: ${e.message}`); }
+  if (State.gitSelectedFile?.path === filePath) {
+    State.gitSelectedFile = null;
+    State.gitDiff = null;
+  }
+  await refreshGitStatus();
+}
+
+async function gitCommit() {
+  const summary = State.gitCommitSummary.trim();
+  if (!summary) return;
+  showGitOpResult('Committing…');
+  try {
+    const r = await API.gitCommit(State.projectPath, summary, State.gitCommitBody || undefined);
+    State.gitCommitSummary = '';
+    State.gitCommitBody = '';
+    showGitOpResult(r.ok ? '✓ Committed' : '✗ ' + (r.error || 'Unknown error'), r.ok);
+    if (r.ok) {
+      // refresh log + status
+      const [status, log] = await Promise.allSettled([API.gitStatus(State.projectPath), API.gitLog(State.projectPath)]);
+      if (status.value) State.gitStatus = status.value;
+      if (log.value)    State.gitLog    = log.value;
+      renderTabContent();
+      renderTabBar();
+    }
+  } catch (e) {
+    showGitOpResult('✗ ' + e.message, false);
+  }
+}
+
+async function gitPull() {
+  showGitOpResult('Pulling…');
+  try {
+    const r = await API.gitPull(State.projectPath);
+    showGitOpResult(r.ok ? '✓ ' + (r.output || 'Done') : '✗ ' + (r.error || 'Failed'), r.ok);
+    if (r.ok) await refreshGitStatus();
+  } catch (e) { showGitOpResult('✗ ' + e.message, false); }
+}
+
+async function gitPush() {
+  showGitOpResult('Pushing…');
+  try {
+    const r = await API.gitPush(State.projectPath);
+    showGitOpResult(r.ok ? '✓ ' + (r.output || 'Done') : '✗ ' + (r.error || 'Failed'), r.ok);
+    if (r.ok) await refreshGitStatus();
+  } catch (e) { showGitOpResult('✗ ' + e.message, false); }
+}
+
+function gitOpenPR() {
+  const branch = State.gitStatus?.branch;
+  const remote = State.gitRemotes?.remotes?.[0]?.url || '';
+  const m = remote.match(/github\.com[:/](.+?)(?:\.git)?$/);
+  if (m && branch) { window.open(`https://github.com/${m[1]}/compare/${branch}`); return; }
+  const gl = remote.match(/gitlab\.com[:/](.+?)(?:\.git)?$/);
+  if (gl && branch) { window.open(`https://gitlab.com/${gl[1]}/-/merge_requests/new?merge_request[source_branch]=${branch}`); return; }
+  alert('Could not determine PR URL from remote: ' + remote);
+}
+
+function showGitOpResult(msg, ok) {
+  const el = document.getElementById('git-op-result');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = 'git-op-result ' + (ok === true ? 'ok' : ok === false ? 'err' : '');
+  if (ok !== undefined) setTimeout(() => { if (el) el.textContent = ''; }, 4000);
+}
+
+async function gitAddWorktree() {
+  const branch   = document.getElementById('git-wt-branch')?.value.trim();
+  const wtPath   = document.getElementById('git-wt-path')?.value.trim();
+  const existing = document.getElementById('git-wt-existing')?.checked || false;
+  if (!branch || !wtPath) return alert('Enter both a branch name and a path.');
+  try {
+    const r = await API.gitWorktreeAdd(State.projectPath, wtPath, branch, existing);
+    if (!r.ok) { alert('Error: ' + r.error); return; }
+    // Pin the worktree so it appears in the sidebar
+    await fetch('/api/pinned-projects', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: wtPath }),
+    });
+    await loadPinnedProjects();
+    const wt = await API.gitWorktrees(State.projectPath);
+    State.gitWorktrees = wt;
+    renderTabContent();
+    renderProjectList();
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+async function gitRemoveWorktree(wtPath) {
+  if (!confirm(`Remove worktree at ${wtPath}?`)) return;
+  try {
+    const r = await API.gitWorktreeRemove(State.projectPath, wtPath);
+    if (!r.ok) { alert('Error: ' + r.error); return; }
+    const wt = await API.gitWorktrees(State.projectPath);
+    State.gitWorktrees = wt;
+    renderTabContent();
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+// ─── Terminal Panel ───────────────────────────────────────────
+
+const _terminals = {};   // { id: { xterm, ws, fitAddon, el } }
+let _activeTermId = null;
+let _termNextId = 0;
+
+// ── Height persistence ──
+const TERM_HEIGHT_KEY = 'terminal-panel-height';
+(function initTerminalHeight() {
+  const saved = parseInt(localStorage.getItem(TERM_HEIGHT_KEY), 10);
+  if (saved && saved >= 120) State.terminalHeight = saved;
+  _applyTerminalHeight(State.terminalHeight);
+})();
+
+function _applyTerminalHeight(px) {
+  const h = Math.max(80, Math.min(px, Math.floor(window.innerHeight * 0.7)));
+  State.terminalHeight = h;
+  document.documentElement.style.setProperty('--terminal-panel-height', h + 'px');
+  const panel = document.getElementById('terminal-panel');
+  if (panel) { panel.style.height = h + 'px'; panel.style.maxHeight = h + 'px'; }
+}
+
+// ── Tray rendering ──
+function renderTray() {
+  const trayTabs = document.getElementById('terminal-tray-tabs');
+  if (!trayTabs) return;
+  const ids = Object.keys(_terminals);
+
+  if (ids.length === 0) {
+    // Placeholder chip — spawns + opens on click
+    trayTabs.innerHTML = `<div class="terminal-tray-chip" onclick="trayNewTerminal()"><span>Terminal 1</span></div>`;
+  } else {
+    trayTabs.innerHTML = ids.map((id, i) => {
+      const isActive = id === _activeTermId;
+      return `<div class="terminal-tray-chip${isActive ? ' active' : ''}" onclick="trayClickChip('${id}')">
+        <span>Terminal ${i + 1}</span>
+        <button class="terminal-tray-chip-close" onclick="event.stopPropagation();closeTerminalTab('${id}')" title="Close">✕</button>
+      </div>`;
+    }).join('');
+  }
+
+  const cwdEl = document.getElementById('terminal-cwd');
+  if (cwdEl) {
+    const cwd = State.projectPath || '';
+    cwdEl.textContent = cwd ? '~/' + cwd.split('/').slice(-2).join('/') : '~';
+  }
+}
+
+function trayClickChip(id) {
+  const panel = document.getElementById('terminal-panel');
+  if (!panel) return;
+  if (_activeTermId === id && !panel.classList.contains('hidden')) {
+    minimizeTerminal();
+  } else {
+    switchTerminalTab(id);
+    expandTerminal();
+  }
+}
+
+function trayNewTerminal() {
+  expandTerminal();
+  spawnTerminal();
+}
+
+function expandTerminal() {
+  const panel = document.getElementById('terminal-panel');
+  if (!panel) return;
+  panel.classList.remove('hidden');
+  State.terminalPanelOpen = true;
+  if (_activeTermId && _terminals[_activeTermId]) {
+    setTimeout(() => _terminals[_activeTermId].fitAddon.fit(), 50);
+  }
+}
+
+// Called when navigating away from editor tab to a different project/global
+function _leaveEditorTab() {
+  minimizeTerminal();
+  const mainArea = document.getElementById('main-area');
+  if (mainArea) mainArea.classList.remove('editor-active');
+}
+
+function minimizeTerminal() {
+  const panel = document.getElementById('terminal-panel');
+  if (!panel) return;
+  panel.classList.add('hidden');
+  State.terminalPanelOpen = false;
+}
+
+function closeActiveTerminalTab() {
+  if (_activeTermId) closeTerminalTab(_activeTermId);
+}
+
+function spawnTerminal() {
+  const id  = 'term-' + (++_termNextId);
+  const cwd = State.projectPath || '';
+  const wsUrl = `ws://${location.host}/terminal${cwd ? '?cwd=' + encodeURIComponent(cwd) : ''}`;
+
+  const container = document.getElementById('terminal-container');
+  if (!container) return;
+  const termEl = document.createElement('div');
+  termEl.id = id;
+  termEl.style.cssText = 'width:100%;height:100%;display:block';
+  container.appendChild(termEl);
+
+  Object.values(_terminals).forEach(t => { t.el.style.display = 'none'; });
+
+  const xterm = new Terminal({
+    fontSize: 13,
+    fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+    theme: { background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#aeafad' },
+    cursorBlink: true,
+    scrollback: 5000,
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  xterm.loadAddon(fitAddon);
+
+  // Clickable file paths — match path:line patterns Claude outputs
+  if (window.WebLinksAddon) {
+    const filePathRegex = /(?:^|[\s"'(])((\.{0,2}\/[\w.\-/]+|[\w.\-]+\/[\w.\-/]+)\.(js|ts|tsx|jsx|mjs|cjs|json|md|yaml|yml|css|scss|html|sh|py|rb|go|rs|java|php|txt|env|toml|conf|lock)(?::\d+(?::\d+)?)?)/;
+    const webLinks = new WebLinksAddon.WebLinksAddon(
+      (e, uri) => {
+        e.preventDefault();
+        const rawPath = uri.replace(/^[\s"'(]+/, '').replace(/:[\d:]+$/, '');
+        let resolved = rawPath;
+        if (!rawPath.startsWith('/') && State.projectPath) {
+          resolved = State.projectPath.replace(/\/$/, '') + '/' + rawPath;
+        }
+        openEditorFile(resolved);
+        State.currentTab = 'editor';
+        renderApp();
+      },
+      { urlRegex: filePathRegex }
+    );
+    xterm.loadAddon(webLinks);
+  }
+
+  xterm.open(termEl);
+  setTimeout(() => fitAddon.fit(), 10);
+
+  const ws = new WebSocket(wsUrl);
+  ws.onopen = () => {
+    const { cols, rows } = xterm;
+    ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+  };
+  ws.onmessage = e => {
+    try {
+      const msg = JSON.parse(e.data);
+      if (msg.type === 'output') xterm.write(msg.data);
+      if (msg.type === 'exit')   xterm.write('\r\n\x1b[33m[Process exited]\x1b[0m\r\n');
+    } catch { xterm.write(e.data); }
+  };
+  ws.onclose = () => xterm.write('\r\n\x1b[31m[Disconnected]\x1b[0m\r\n');
+
+  xterm.onData(data => {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'input', data }));
+  });
+
+  const ro = new ResizeObserver(() => {
+    fitAddon.fit();
+    if (ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'resize', cols: xterm.cols, rows: xterm.rows }));
+    }
+  });
+  ro.observe(container);
+
+  _terminals[id] = { xterm, ws, fitAddon, el: termEl, ro };
+  _activeTermId  = id;
+
+  renderTray();
+}
+
+function switchTerminalTab(id) {
+  const t = _terminals[id];
+  if (!t) return;
+  Object.values(_terminals).forEach(term => { term.el.style.display = 'none'; });
+  t.el.style.display = 'block';
+  _activeTermId = id;
+  setTimeout(() => t.fitAddon.fit(), 20);
+  renderTray();
+}
+
+function closeTerminalTab(id) {
+  const t = _terminals[id];
+  if (!t) return;
+  try { t.ws.close(); t.xterm.dispose(); t.ro.disconnect(); t.el.remove(); } catch { /* ignore */ }
+  delete _terminals[id];
+  const remaining = Object.keys(_terminals);
+  if (remaining.length) {
+    switchTerminalTab(remaining[remaining.length - 1]);
+  } else {
+    _activeTermId = null;
+    minimizeTerminal();
+  }
+  renderTray();
+}
+
+// ── Drag-resize ──
+function initTerminalResize() {
+  const handle = document.getElementById('terminal-resize-handle');
+  if (!handle) return;
+  let startY = 0, startH = 0, dragging = false;
+
+  handle.addEventListener('mousedown', e => {
+    e.preventDefault();
+    dragging = true;
+    startY = e.clientY;
+    startH = State.terminalHeight;
+    handle.classList.add('dragging');
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'ns-resize';
+  });
+
+  document.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    const delta = startY - e.clientY;   // drag up = increase height
+    _applyTerminalHeight(startH + delta);
+    if (_activeTermId && _terminals[_activeTermId]) _terminals[_activeTermId].fitAddon.fit();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.userSelect = '';
+    document.body.style.cursor = '';
+    localStorage.setItem(TERM_HEIGHT_KEY, String(State.terminalHeight));
+    if (_activeTermId && _terminals[_activeTermId]) _terminals[_activeTermId].fitAddon.fit();
+  });
 }
 
 async function onTreeToggle(nodePath) {
@@ -2886,6 +4294,25 @@ function doExport() {
     : '/api/export';
 }
 
+// Silent refresh — re-fetches data without resetting current tab or navigation state
+async function doSilentRefresh() {
+  try {
+    if (State.mode === 'project' && State.projectPath) {
+      const [analysis, scan] = await Promise.allSettled([
+        API.analyze(State.projectPath),
+        API.scan(State.projectPath),
+      ]);
+      if (analysis.status === 'fulfilled') State.analysis = analysis.value;
+      if (scan.status === 'fulfilled')     State.scan     = scan.value;
+    } else {
+      const scan = await API.scan(null);
+      State.scan = scan;
+    }
+    renderApp();
+    renderProjectList();
+  } catch { /* ignore — stale data is fine */ }
+}
+
 function doRefresh() {
   if (State.mode === 'project' && State.projectPath) {
     selectProject(State.projectPath);
@@ -2905,7 +4332,10 @@ function initSSE() {
 
   es.addEventListener('cache-invalidated', () => {
     clearTimeout(State.refreshTimer);
-    State.refreshTimer = setTimeout(() => doRefresh(), 800);
+    State.refreshTimer = setTimeout(() => doSilentRefresh(), 800);
+    if (State.editorPath && State.currentTab === 'editor' && !State.editorDirty) {
+      reloadEditorFile();
+    }
   });
 
   es.onerror = () => {
@@ -3048,6 +4478,25 @@ async function initFromUrl() {
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
   initSSE();
-  _suppressUrlUpdate = true;
-  initFromUrl().then(() => { _suppressUrlUpdate = false; });
+  loadPinnedProjects().then(() => loadGlobal());
+
+  // Ctrl+` / Cmd+` — toggle terminal (VS Code style)
+  document.addEventListener('keydown', e => {
+    if (e.key === '`' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (State.currentTab !== 'editor') {
+        State.currentTab = 'editor';
+        renderApp();
+      }
+      const panel = document.getElementById('terminal-panel');
+      if (panel && panel.classList.contains('hidden')) {
+        if (Object.keys(_terminals).length === 0) trayNewTerminal();
+        else expandTerminal();
+      } else {
+        minimizeTerminal();
+      }
+    }
+  });
+
+  initTerminalResize();
 });

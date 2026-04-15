@@ -1,15 +1,17 @@
 'use strict';
 
-const express = require('express');
-const path    = require('path');
-const fs      = require('fs');
-const os      = require('os');
-const matter  = require('gray-matter');
+const express  = require('express');
+const path     = require('path');
+const fs       = require('fs');
+const os       = require('os');
+const matter   = require('gray-matter');
 const chokidar = require('chokidar');
+const { WebSocketServer } = require('ws');
+const pty      = require('node-pty');
 
 const app       = express();
 app.use(express.json());
-const PORT      = process.env.PORT || 3131;
+const PORT      = process.env.PORT || 8080;
 const CLAUDE_DIR    = path.resolve(os.homedir(), '.claude');
 const PINNED_FILE   = path.join(CLAUDE_DIR, 'inspector-projects.json');
 
@@ -132,6 +134,7 @@ function readSettingsJson(dir, filename = 'settings.json') {
       }
     }
   }
+  result.hooksRaw = data.hooks || {};
 
   return result;
 }
@@ -252,6 +255,73 @@ function readPlansDir(dir) {
   return entries;
 }
 
+function readRulesDir(dir) {
+  const rulesDir = path.join(dir, 'rules');
+  if (!fs.existsSync(rulesDir)) return [];
+  const entries = [];
+  function scanDir(d, prefix) {
+    try {
+      for (const item of fs.readdirSync(d).sort()) {
+        const itemPath = path.join(d, item);
+        const stat = fs.statSync(itemPath);
+        if (stat.isDirectory()) {
+          scanDir(itemPath, prefix ? `${prefix}/${item}` : item);
+        } else if (item.endsWith('.md')) {
+          const raw = safeReadText(itemPath);
+          if (!raw) continue;
+          const parsed = matter(raw);
+          const name = prefix ? `${prefix}/${item.replace(/\.md$/, '')}` : item.replace(/\.md$/, '');
+          entries.push({
+            name, filename: item, filePath: itemPath, raw,
+            frontmatter: parsed.data || {},
+            body: parsed.content || raw,
+            excerpt: excerpt(parsed.content || raw, 150),
+            paths: parsed.data?.paths || [],
+            wordCount: wordCount(raw),
+            subdir: prefix || null,
+          });
+        }
+      }
+    } catch { /* permission */ }
+  }
+  scanDir(rulesDir, '');
+  return entries;
+}
+
+function readAgentsDir(dir) {
+  const agentsDir = path.join(dir, 'agents');
+  if (!fs.existsSync(agentsDir)) return [];
+  const entries = [];
+  try {
+    for (const item of fs.readdirSync(agentsDir).sort()) {
+      const itemPath = path.join(agentsDir, item);
+      const stat = fs.statSync(itemPath);
+      if (stat.isDirectory()) {
+        const agentMd = path.join(itemPath, 'AGENT.md');
+        const altMd   = path.join(itemPath, `${item}.md`);
+        const fp = fs.existsSync(agentMd) ? agentMd : fs.existsSync(altMd) ? altMd : null;
+        if (!fp) continue;
+        const raw = safeReadText(fp);
+        if (!raw) continue;
+        const parsed = matter(raw);
+        entries.push({ name: item, filename: path.basename(fp), raw,
+          frontmatter: parsed.data || {}, meta: buildSkillMeta(parsed.data, item),
+          body: parsed.content || raw, excerpt: excerpt(parsed.content || raw, 150),
+          wordCount: wordCount(raw), isFolder: true });
+      } else if (item.endsWith('.md')) {
+        const raw = safeReadText(itemPath);
+        if (!raw) continue;
+        const parsed = matter(raw);
+        entries.push({ name: item.replace(/\.md$/, ''), filename: item, raw,
+          frontmatter: parsed.data || {}, meta: buildSkillMeta(parsed.data, item.replace(/\.md$/, '')),
+          body: parsed.content || raw, excerpt: excerpt(parsed.content || raw, 150),
+          wordCount: wordCount(raw), isFolder: false });
+      }
+    }
+  } catch { /* empty */ }
+  return entries;
+}
+
 function readInstalledPlugins(dir) {
   const filePath = path.join(dir, 'plugins', 'installed_plugins.json');
   const data = safeReadJson(filePath);
@@ -358,6 +428,9 @@ function readProjectConfig(projectPath) {
     mcpJson: readMcpJson(projectPath),
     localSkills:   hasClaudeDir ? readSkillsDir(claudeDir) : [],
     localCommands: hasClaudeDir ? readCommandsDir(claudeDir) : [],
+    localRules:    hasClaudeDir ? readRulesDir(claudeDir) : [],
+    localAgents:   hasClaudeDir ? readAgentsDir(claudeDir) : [],
+    claudeIgnore:  (() => { const f = path.join(projectPath, '.claudeignore'); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null; })(),
   };
 }
 
@@ -411,6 +484,8 @@ async function buildScanResult(projectPath = null) {
       commands: readCommandsDir(CLAUDE_DIR),
       skills: readSkillsDir(CLAUDE_DIR),
       plans: readPlansDir(CLAUDE_DIR),
+      rules:  readRulesDir(CLAUDE_DIR),
+      agents: readAgentsDir(CLAUDE_DIR),
       plugins: { installedPlugins, warpPlugin },
       stats: readStatsCache(CLAUDE_DIR),
       projects: readProjectsDir(CLAUDE_DIR),
@@ -454,6 +529,15 @@ const watcher = chokidar.watch(WATCH_PATHS, {
   ignoreInitial: true,
   awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 }
 });
+
+const _watchedProjectPaths = new Set();
+
+function watchProjectPath(projectPath) {
+  const resolved = path.resolve(projectPath);
+  if (_watchedProjectPaths.has(resolved)) return;
+  _watchedProjectPaths.add(resolved);
+  watcher.add(resolved);
+}
 
 watcher.on('all', (event, filePath) => {
   invalidateCache();
@@ -617,6 +701,42 @@ app.get('/api/file', async (req, res) => {
     res.json({ content, size: stat.size, truncated: false, mtime: stat.mtime.toISOString() });
   } catch (err) {
     res.status(404).json({ error: err.message, code: 'FILE_NOT_FOUND' });
+  }
+});
+
+app.get('/api/file-tree', (req, res) => {
+  const dirPath    = req.query.path;
+  const projectPath = req.query.project || null;
+  if (!dirPath) return res.status(400).json({ error: 'Missing path' });
+
+  const resolved = path.resolve(dirPath);
+  const allowedBases = [CLAUDE_DIR];
+  if (projectPath) allowedBases.push(path.resolve(projectPath));
+  const allowed = allowedBases.some(base => resolved === base || resolved.startsWith(base + path.sep));
+  if (!allowed) return res.status(403).json({ error: 'Forbidden' });
+
+  // Dynamically watch project path so editor live-syncs when Claude edits files
+  if (projectPath) watchProjectPath(projectPath);
+
+  try {
+    const tree = buildFileTree(resolved, 0, 5);
+    res.json({ tree });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/file', (req, res) => {
+  const { path: filePath, content, project } = req.body || {};
+  if (!filePath || content == null) return res.status(400).json({ error: 'Missing path or content' });
+  const projectPath = project || null;
+  if (!isPathAllowed(filePath, projectPath)) return res.status(403).json({ error: 'Forbidden' });
+  try {
+    fs.writeFileSync(filePath, content, 'utf8');
+    invalidateCache();
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1287,6 +1407,145 @@ app.post('/api/skills/import', (req, res) => {
   res.json({ success: true, path: filePath });
 });
 
+// ─── Skill Delete ────────────────────────────────────────────────────────────
+
+app.delete('/api/skills', express.json(), (req, res) => {
+  const { name, scope, projectPath } = req.body;
+  if (!name) return res.status(400).json({ error: 'Missing name' });
+
+  const baseDir = scope === 'project' && projectPath
+    ? path.join(path.resolve(projectPath), '.claude', 'skills')
+    : path.join(CLAUDE_DIR, 'skills');
+
+  const resolved = resolveSourceFile(baseDir, name, 'skill');
+  if (!resolved) return res.status(404).json({ error: 'Skill not found' });
+
+  try {
+    if (resolved.isFolder) {
+      fs.rmSync(resolved.dir, { recursive: true, force: true });
+    } else {
+      fs.unlinkSync(resolved.file);
+    }
+    invalidateCache();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/rules', express.json(), (req, res) => {
+  const { name, scope, projectPath } = req.body;
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const baseDir = scope === 'global'
+    ? path.join(CLAUDE_DIR, 'rules')
+    : path.join(path.resolve(projectPath || ''), '.claude', 'rules');
+  const filePath = path.join(baseDir, `${name}.md`);
+  try {
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    else return res.status(404).json({ error: 'Rule not found' });
+    invalidateCache();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/agents', express.json(), (req, res) => {
+  const { name, scope, projectPath } = req.body;
+  if (!name) return res.status(400).json({ error: 'name required' });
+  const baseDir = scope === 'global'
+    ? path.join(CLAUDE_DIR, 'agents')
+    : path.join(path.resolve(projectPath || ''), '.claude', 'agents');
+  const flat = path.join(baseDir, `${name}.md`);
+  const folder = path.join(baseDir, name);
+  try {
+    if (fs.existsSync(flat)) fs.unlinkSync(flat);
+    else if (fs.existsSync(folder)) fs.rmSync(folder, { recursive: true, force: true });
+    else return res.status(404).json({ error: 'Agent not found' });
+    invalidateCache();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── Share Skills/Commands ───────────────────────────────────────────────────
+
+// Resolve skill/command source: handles flat .md and folder skills
+function resolveSourceFile(baseDir, name, type) {
+  if (type === 'command') {
+    const f = path.join(baseDir, `${name}.md`);
+    return fs.existsSync(f) ? { file: f, isFolder: false } : null;
+  }
+  // Skills: flat file, then folder/SKILL.md, then folder/<name>.md
+  const flat      = path.join(baseDir, `${name}.md`);
+  const folderDir = path.join(baseDir, name);
+  const skillMd   = path.join(folderDir, 'SKILL.md');
+  const altMd     = path.join(folderDir, `${name}.md`);
+  if (fs.existsSync(flat))    return { file: flat,    isFolder: false };
+  if (fs.existsSync(skillMd)) return { file: skillMd, isFolder: true, dir: folderDir };
+  if (fs.existsSync(altMd))   return { file: altMd,   isFolder: true, dir: folderDir };
+  return null;
+}
+
+function copyDirRecursive(src, dest) {
+  if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name), d = path.join(dest, entry.name);
+    if (entry.isDirectory()) copyDirRecursive(s, d);
+    else fs.copyFileSync(s, d);
+  }
+}
+
+app.post('/api/share', express.json(), (req, res) => {
+  const { items, targetProject } = req.body;
+  if (!items?.length || !targetProject)
+    return res.status(400).json({ error: 'Missing items or targetProject' });
+
+  const resolvedTarget = path.resolve(targetProject);
+  const copied = [], errors = [];
+
+  for (const item of items) {
+    const { name, type, scope, sourceProject } = item;
+    if (!name || !type) { errors.push({ name: name || '?', error: 'Missing fields' }); continue; }
+
+    const subdir = type === 'command' ? 'commands' : type === 'rule' ? 'rules' : type === 'agent' ? 'agents' : 'skills';
+    const sourceBase = scope === 'global'
+      ? path.join(CLAUDE_DIR, subdir)
+      : path.join(path.resolve(sourceProject || ''), '.claude', subdir);
+
+    const destDir = path.join(resolvedTarget, '.claude', subdir);
+
+    try {
+      if (type === 'rule') {
+        // Rules: name may include subdir like "frontend/react"
+        const srcFile = path.join(sourceBase, `${name}.md`);
+        if (!fs.existsSync(srcFile)) { errors.push({ name, error: 'Source rule not found' }); continue; }
+        const destFile = path.join(destDir, `${name}.md`);
+        const destSubDir = path.dirname(destFile);
+        if (!fs.existsSync(destSubDir)) fs.mkdirSync(destSubDir, { recursive: true });
+        fs.copyFileSync(srcFile, destFile);
+        copied.push({ name });
+      } else {
+        const resolved = resolveSourceFile(sourceBase, name, type);
+        if (!resolved) { errors.push({ name, error: 'Source file not found' }); continue; }
+        if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
+        if (resolved.isFolder) {
+          copyDirRecursive(resolved.dir, path.join(destDir, name));
+        } else {
+          fs.copyFileSync(resolved.file, path.join(destDir, `${name}.md`));
+        }
+        copied.push({ name });
+      }
+    } catch (e) {
+      errors.push({ name, error: e.message });
+    }
+  }
+
+  if (copied.length) invalidateCache();
+  res.json({ copied, errors });
+});
+
 // ─── Bundle Export/Import ────────────────────────────────────────────────────
 
 app.post('/api/export/bundle', async (req, res) => {
@@ -1372,10 +1631,352 @@ app.post('/api/import/bundle', (req, res) => {
   res.json(result);
 });
 
+// ─── Git Endpoints ────────────────────────────────────────────────────────────
+
+const { execFile } = require('child_process');
+
+function git(args, cwd) {
+  return new Promise((resolve, reject) => {
+    execFile('git', args, { cwd, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err && !stdout) reject(new Error(stderr?.trim() || err.message));
+      else resolve(stdout.trim());
+    });
+  });
+}
+
+function getProjectPath(req) {
+  return req.query.project || req.body?.project || null;
+}
+
+app.get('/api/git/is-repo', async (req, res) => {
+  const p = getProjectPath(req);
+  if (!p) return res.json({ isRepo: false });
+  try {
+    await git(['rev-parse', '--git-dir'], p);
+    res.json({ isRepo: true });
+  } catch {
+    res.json({ isRepo: false });
+  }
+});
+
+app.get('/api/git/status', async (req, res) => {
+  const p = getProjectPath(req);
+  if (!p) return res.status(400).json({ error: 'project required' });
+  try {
+    const [porcelain, branchRaw, upstreamRaw] = await Promise.allSettled([
+      git(['status', '--porcelain=v1'], p),
+      git(['branch', '--show-current'], p),
+      git(['rev-list', '--count', '--left-right', '@{upstream}...HEAD'], p),
+    ]);
+
+    const branch = branchRaw.status === 'fulfilled' ? branchRaw.value : 'unknown';
+
+    let ahead = 0, behind = 0;
+    if (upstreamRaw.status === 'fulfilled' && upstreamRaw.value) {
+      const parts = upstreamRaw.value.split(/\s+/);
+      behind = parseInt(parts[0], 10) || 0;
+      ahead  = parseInt(parts[1], 10) || 0;
+    }
+
+    const files = [];
+    if (porcelain.status === 'fulfilled' && porcelain.value) {
+      for (const line of porcelain.value.split('\n')) {
+        if (!line) continue;
+        const x = line[0];  // index (staged)
+        const y = line[1];  // worktree (unstaged)
+        let filePath = line.slice(3);
+        // Handle renames: "old -> new"
+        if (filePath.includes(' -> ')) filePath = filePath.split(' -> ')[1];
+
+        // A file can appear in both staged and unstaged
+        if (x !== ' ' && x !== '?') {
+          files.push({ path: filePath, x, y, staged: true });
+        }
+        if (y !== ' ' && y !== '?') {
+          // Avoid adding twice if both staged and unstaged are set
+          if (x === ' ' || x === '?') files.push({ path: filePath, x, y, staged: false });
+        }
+        if (x === '?' && y === '?') {
+          files.push({ path: filePath, x: '?', y: '?', staged: false });
+        }
+      }
+    }
+
+    res.json({ branch, ahead, behind, files });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/git/diff', async (req, res) => {
+  const p = getProjectPath(req);
+  const file = req.query.file;
+  const staged = req.query.staged === '1';
+  if (!p || !file) return res.status(400).json({ error: 'project and file required' });
+  try {
+    const args = staged
+      ? ['diff', '--cached', '--', file]
+      : ['diff', '--', file];
+    const diff = await git(args, p);
+    res.json({ diff });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/git/log', async (req, res) => {
+  const p = getProjectPath(req);
+  if (!p) return res.status(400).json({ error: 'project required' });
+  try {
+    const raw = await git(['log', '--pretty=format:%H|%s|%an|%ar|%D', '-30'], p);
+    const commits = raw ? raw.split('\n').map(line => {
+      const [hash, subject, author, date, refs] = line.split('|');
+      return { hash, subject, author, date, refs };
+    }) : [];
+    res.json({ commits });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/git/branches', async (req, res) => {
+  const p = getProjectPath(req);
+  if (!p) return res.status(400).json({ error: 'project required' });
+  try {
+    const raw = await git(['branch', '-a', '--format=%(refname:short)'], p);
+    const branches = raw ? raw.split('\n').filter(Boolean) : [];
+    res.json({ branches });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/git/checkout', async (req, res) => {
+  const p      = req.body?.project;
+  const branch = req.body?.branch;
+  if (!p || !branch) return res.status(400).json({ error: 'project and branch required' });
+  try {
+    const output = await git(['checkout', branch], p);
+    res.json({ ok: true, output });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/git/remotes', async (req, res) => {
+  const p = getProjectPath(req);
+  if (!p) return res.status(400).json({ error: 'project required' });
+  try {
+    const raw = await git(['remote', '-v'], p);
+    const seen = new Set();
+    const remotes = [];
+    if (raw) {
+      for (const line of raw.split('\n')) {
+        const m = line.match(/^(\S+)\s+(\S+)/);
+        if (m && !seen.has(m[1])) {
+          seen.add(m[1]);
+          remotes.push({ name: m[1], url: m[2] });
+        }
+      }
+    }
+    res.json({ remotes });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/git/worktrees', async (req, res) => {
+  const p = getProjectPath(req);
+  if (!p) return res.status(400).json({ error: 'project required' });
+  try {
+    const raw = await git(['worktree', 'list', '--porcelain'], p);
+    const worktrees = [];
+    let current = null;
+    for (const line of (raw || '').split('\n')) {
+      if (line.startsWith('worktree ')) {
+        if (current) worktrees.push(current);
+        current = { path: line.slice(9), branch: '', isMain: false };
+      } else if (line.startsWith('branch ') && current) {
+        current.branch = line.slice(7).replace('refs/heads/', '');
+      } else if (line === 'bare' && current) {
+        current.bare = true;
+      } else if (line === '' && current) {
+        worktrees.push(current);
+        current = null;
+      }
+    }
+    if (current) worktrees.push(current);
+    if (worktrees.length > 0) worktrees[0].isMain = true;
+    res.json({ worktrees });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.post('/api/git/stage', async (req, res) => {
+  const p = req.body?.project;
+  const files = req.body?.files;
+  if (!p || !files?.length) return res.status(400).json({ error: 'project and files required' });
+  try {
+    await git(['add', '--', ...files], p);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/git/unstage', async (req, res) => {
+  const p = req.body?.project;
+  const files = req.body?.files;
+  if (!p || !files?.length) return res.status(400).json({ error: 'project and files required' });
+  try {
+    await git(['restore', '--staged', '--', ...files], p);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/git/discard', async (req, res) => {
+  const p = req.body?.project;
+  const file = req.body?.file;
+  if (!p || !file) return res.status(400).json({ error: 'project and file required' });
+  try {
+    await git(['checkout', '--', file], p);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/git/commit', async (req, res) => {
+  const p = req.body?.project;
+  const summary = req.body?.summary;
+  const body    = req.body?.body;
+  if (!p || !summary) return res.status(400).json({ error: 'project and summary required' });
+  try {
+    const args = ['commit', '-m', summary];
+    if (body) args.push('-m', body);
+    const output = await git(args, p);
+    res.json({ ok: true, output });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/git/pull', async (req, res) => {
+  const p = req.body?.project;
+  if (!p) return res.status(400).json({ error: 'project required' });
+  try {
+    const output = await git(['pull'], p);
+    res.json({ ok: true, output });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/git/push', async (req, res) => {
+  const p = req.body?.project;
+  if (!p) return res.status(400).json({ error: 'project required' });
+  try {
+    const output = await git(['push'], p);
+    res.json({ ok: true, output });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.post('/api/git/worktree/add', async (req, res) => {
+  const p        = req.body?.project;
+  const wtPath   = req.body?.path;
+  const branch   = req.body?.branch;
+  const existing = req.body?.existing;   // true = checkout existing branch, false = create new
+  if (!p || !wtPath || !branch) return res.status(400).json({ error: 'project, path, and branch required' });
+  try {
+    const args = existing
+      ? ['worktree', 'add', wtPath, branch]           // checkout existing branch
+      : ['worktree', 'add', wtPath, '-b', branch];    // create new branch
+    const output = await git(args, p);
+    res.json({ ok: true, output });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.delete('/api/git/worktree', async (req, res) => {
+  const p      = req.body?.project;
+  const wtPath = req.body?.path;
+  if (!p || !wtPath) return res.status(400).json({ error: 'project and path required' });
+  try {
+    const output = await git(['worktree', 'remove', wtPath], p);
+    res.json({ ok: true, output });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ─── Start ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
+const httpServer = app.listen(PORT, () => {
   console.log(`\n  Claude Map`);
   console.log(`  ──────────`);
   console.log(`  http://localhost:${PORT}\n`);
+});
+
+// ─── Terminal WebSocket (node-pty) ────────────────────────────────────────────
+
+const wss = new WebSocketServer({ server: httpServer, path: '/terminal' });
+
+wss.on('connection', (ws, req) => {
+  const params = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+  const cwd = (() => {
+    try {
+      const p = params.get('cwd');
+      return p && fs.existsSync(p) ? p : os.homedir();
+    } catch { return os.homedir(); }
+  })();
+
+  // Try shells in order until one spawns successfully
+  const shellCandidates = [
+    process.env.SHELL,
+    '/bin/zsh', '/bin/bash', '/bin/sh',
+  ].filter(Boolean);
+
+  let term;
+  let lastErr;
+  for (const sh of shellCandidates) {
+    try {
+      term = pty.spawn(sh, [], {
+        name: 'xterm-256color',
+        cols: 80, rows: 24,
+        cwd,
+        env: { ...process.env, TERM: 'xterm-256color' },
+      });
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!term) {
+    ws.send(JSON.stringify({ type: 'output', data: `\r\nFailed to spawn shell: ${lastErr?.message}\r\nTry: npm rebuild node-pty\r\n` }));
+    ws.close();
+    return;
+  }
+
+  term.onData(data => {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'output', data }));
+  });
+  term.onExit(() => {
+    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'exit' }));
+  });
+
+  ws.on('message', raw => {
+    try {
+      const msg = JSON.parse(raw);
+      if (msg.type === 'input')  term.write(msg.data);
+      if (msg.type === 'resize') term.resize(Math.max(1, msg.cols), Math.max(1, msg.rows));
+    } catch { /* ignore malformed */ }
+  });
+
+  ws.on('close', () => { try { term.kill(); } catch { /* already dead */ } });
 });
