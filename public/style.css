@@ -203,7 +203,8 @@ body {
 }
 .sidebar-project-item:active { transform: scale(0.98); }
 .sidebar-project-item:hover { background: var(--bg-hover); }
-.sidebar-project-item:hover .proj-remove-btn { opacity: 1; }
+.sidebar-project-item:hover .proj-remove-btn,
+.sidebar-project-item:hover .remove-pin { opacity: 1; }
 .sidebar-project-item.active { background: rgba(0,221,181,0.08); border-left: 2px solid var(--accent-teal); padding-left: 6px; }
 .sidebar-project-item.global-entry { border-bottom: 1px solid var(--bg-border); margin-bottom: 4px; }
 .sidebar-project-item.global-entry.active { background: rgba(0,221,181,0.08); }
@@ -219,12 +220,17 @@ body {
 .proj-path-hint { font-size: 10px; color: var(--text-muted); flex-shrink: 0; }
 .sidebar-project-item.active .proj-name { color: var(--accent-teal); }
 
-.proj-remove-btn {
-  background: none; border: none; color: var(--text-muted); font-size: 14px;
-  cursor: pointer; opacity: 0; padding: 0 2px; line-height: 1; flex-shrink: 0;
-  transition: opacity var(--transition), color var(--transition);
+.proj-remove-btn,
+.remove-pin {
+  background: none; border: none; font-size: 11px; line-height: 1;
+  cursor: pointer; opacity: 0; flex-shrink: 0;
+  padding: 2px 4px; border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  transition: opacity var(--transition), color var(--transition), background var(--transition);
+  position: absolute; right: 4px; top: 50%; transform: translateY(-50%);
 }
-.proj-remove-btn:hover { color: var(--accent-red); }
+.proj-remove-btn:hover,
+.remove-pin:hover { color: var(--accent-red); background: rgba(240,77,77,0.1); }
 
 /* Sidebar footer */
 .sidebar-footer {
@@ -333,6 +339,7 @@ body {
 
 /* ── Tab Content ──────────────────────────────────────────── */
 .tab-content { padding: 14px 18px; animation: content-fade-in 200ms ease; }
+.tab-content:has(.map-container) { animation: none; }
 @keyframes content-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
 .tab-content::-webkit-scrollbar { width: 5px; }
 .tab-content::-webkit-scrollbar-thumb { background: var(--bg-border); border-radius: 4px; border: 2px solid transparent; background-clip: padding-box; }
@@ -1158,3 +1165,68 @@ details.git-section-details[open] .git-section-summary::before { transform: rota
 .git-branch-select:focus { outline: none; border-color: var(--accent-teal); }
 html[data-theme="dark"] .git-branch-select option { background: #1e1e1e; color: #e0e0e0; }
 html[data-theme="light"] .git-branch-select option { background: #fff; color: #1a1a1a; }
+
+/* ── PWA: Window Controls Overlay ────────────────────────────────────────────
+   When installed as a desktop PWA with window-controls-overlay, the sidebar
+   brand becomes the title bar — draggable, with OS traffic lights inset.
+   env(titlebar-area-x/y/width/height) come from the browser based on OS.
+   ─────────────────────────────────────────────────────────────────────────── */
+@media (display-mode: window-controls-overlay) {
+  /* Sidebar brand = title bar */
+  .sidebar-brand {
+    -webkit-app-region: drag;
+    app-region: drag;
+    /* Pad left so content clears the Mac traffic lights (≈80px) */
+    padding-left: max(env(titlebar-area-x, 12px), 12px);
+    min-height: env(titlebar-area-height, 48px);
+  }
+
+  /* Interactive elements inside the drag region must opt out */
+  .sidebar-brand button,
+  .sidebar-brand a,
+  .sidebar-brand input {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+
+  /* Tab bar: draggable strip after the sidebar for when sidebar is narrow/collapsed */
+  .tab-bar {
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .tab-bar .tab-group-item,
+  .tab-bar button,
+  .tab-bar a,
+  .tab-bar select {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+}
+
+/* ── PWA: Standalone (installed, no overlay) ─────────────────────────────────
+   Just a subtle install-state indicator — no structural changes needed since
+   the OS provides a native title bar in standalone mode.
+   ─────────────────────────────────────────────────────────────────────────── */
+@media (display-mode: standalone) {
+  /* Nothing structural — native title bar handles chrome */
+}
+
+/* ── PWA: Install prompt button ───────────────────────────────────────────── */
+.pwa-install-btn {
+  display: none; /* shown by JS when beforeinstallprompt fires */
+  align-items: center; gap: 5px;
+  background: rgba(0,212,170,0.08);
+  border: 1px solid rgba(0,212,170,0.25);
+  border-radius: var(--radius-sm);
+  color: var(--accent-teal);
+  font-size: 11px; font-weight: 600;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+  white-space: nowrap;
+}
+.pwa-install-btn:hover {
+  background: rgba(0,212,170,0.16);
+  border-color: rgba(0,212,170,0.45);
+}
+.pwa-install-btn.visible { display: flex; }

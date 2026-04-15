@@ -364,6 +364,9 @@ function applyTheme(t) {
   if (lightLink) lightLink.disabled = (t === 'dark');
   const btn = document.getElementById('theme-toggle');
   if (btn) btn.title = t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+  // Keep PWA theme-color in sync with current theme
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) metaTheme.content = t === 'dark' ? '#141418' : '#fafafa';
 }
 
 function toggleTheme() {
@@ -676,7 +679,8 @@ function renderTabContent() {
 
   if (State.currentTab === 'map' && State.mode === 'project') {
     el.innerHTML = renderMapTab();
-    requestAnimationFrame(() => drawMapSvgLines());
+    // Double rAF ensures layout is complete before measuring node positions for SVG lines
+    requestAnimationFrame(() => { requestAnimationFrame(() => { drawMapSvgLines(); }); });
     return;
   }
 
@@ -934,6 +938,8 @@ async function addPinnedProject(path) {
 }
 
 async function removePinnedProject(path) {
+  const name = projectName(path);
+  if (!confirm(`Remove "${name}" from pinned projects?`)) return;
   try {
     const data = await fetch('/api/pinned-projects', {
       method: 'DELETE',
@@ -1088,13 +1094,11 @@ function getNodeTitle(nodeId, analysis) {
 function onMapNodeClick(nodeId) {
   State.activeNodeId = State.activeNodeId === nodeId ? null : nodeId;
   renderTabContent();
-  requestAnimationFrame(() => drawMapSvgLines());
 }
 
 function onMapNodeClose() {
   State.activeNodeId = null;
   renderTabContent();
-  requestAnimationFrame(() => drawMapSvgLines());
 }
 
 function renderNodeDetailPanel(nodeId, analysis) {
@@ -1225,9 +1229,10 @@ function drawMapSvgLines() {
   if (!svg || !container) return;
 
   const cRect = container.getBoundingClientRect();
+  console.log('[map-svg] container rect:', cRect.width, 'x', cRect.height, '| defs:', State._mapConnectionDefs.length);
   svg.setAttribute('width',  cRect.width);
   svg.setAttribute('height', cRect.height);
-  svg.innerHTML = '';
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
 
   // CSS vars for colors
   const style = getComputedStyle(document.documentElement);
@@ -1248,7 +1253,7 @@ function drawMapSvgLines() {
   State._mapConnectionDefs.forEach(def => {
     const from = getCenterOf(def.from);
     const to   = getCenterOf(def.to);
-    if (!from || !to) return;
+    if (!from || !to) { console.log('[map-svg] SKIP:', def.from, '->', def.to, 'from:', from, 'to:', to); return; }
 
     const midY = (from.y + to.y) / 2;
     const d    = `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`;
@@ -1268,29 +1273,6 @@ function drawMapSvgLines() {
       path.setAttribute('stroke-dasharray', '3 3');
     }
     svg.appendChild(path);
-
-    // Animate line drawing
-    if (def.type !== 'absent') {
-      try {
-        const len = path.getTotalLength();
-        path.setAttribute('stroke-dasharray', len);
-        path.setAttribute('stroke-dashoffset', len);
-        path.style.animation = `map-line-draw 0.6s ease forwards ${Math.random() * 0.3}s`;
-      } catch {}
-    }
-  });
-
-  // Add glow filter if not present
-  if (!svg.querySelector('defs')) {
-    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
-    const filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
-    filter.id = 'glow';
-    filter.innerHTML = '<feGaussianBlur stdDeviation="2" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>';
-    defs.appendChild(filter);
-    svg.prepend(defs);
-  }
-  svg.querySelectorAll('path').forEach(p => {
-    if (p.getAttribute('stroke-opacity') === '0.7') p.setAttribute('filter', 'url(#glow)');
   });
 
   // ResizeObserver to redraw on resize

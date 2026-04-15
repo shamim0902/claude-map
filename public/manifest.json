@@ -1,0 +1,40 @@
+{
+  "name": "Claude Map",
+  "short_name": "Claude Map",
+  "description": "Visual dashboard for Claude Code project configurations — inspect skills, commands, rules, agents, sessions, and git across all your projects.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "background_color": "#0c0c0f",
+  "theme_color": "#141418",
+  "orientation": "any",
+  "categories": ["developer-tools", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/logo.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Global Config",
+      "short_name": "Global",
+      "description": "Open global Claude configuration",
+      "url": "/",
+      "icons": [{ "src": "/logo.png", "sizes": "any" }]
+    }
+  ],
+  "launch_handler": {
+    "client_mode": ["navigate-existing", "auto"]
+  }
+}
