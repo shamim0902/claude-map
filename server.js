@@ -11,7 +11,7 @@ const pty      = require('node-pty');
 
 const app       = express();
 app.use(express.json());
-const PORT      = process.env.PORT || 8080;
+const PORT      = process.env.PORT || 8888;
 const CLAUDE_DIR    = path.resolve(os.homedir(), '.claude');
 const PINNED_FILE   = path.join(CLAUDE_DIR, 'inspector-projects.json');
 

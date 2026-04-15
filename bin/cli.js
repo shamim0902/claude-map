@@ -26,7 +26,7 @@ if (args.includes('--help') || args.includes('-h')) {
 
   Usage:
     claude-map              Start the dashboard (default port 3131)
-    claude-map -p 8080      Start on a custom port
+    claude-map -p 8888      Start on a custom port
     claude-map --help       Show this help
 
   Options:
