@@ -3182,6 +3182,14 @@ function trayClickChip(id) {
   }
 }
 
+function _syncTermResize(t) {
+  if (!t) return;
+  t.fitAddon.fit();
+  if (t.ws.readyState === 1 && t.xterm.cols > 0) {
+    t.ws.send(JSON.stringify({ type: 'resize', cols: t.xterm.cols, rows: t.xterm.rows }));
+  }
+}
+
 function trayNewTerminal() {
   expandTerminal();
   spawnTerminal();
@@ -3193,7 +3201,7 @@ function expandTerminal() {
   panel.classList.remove('hidden');
   State.terminalPanelOpen = true;
   if (_activeTermId && _terminals[_activeTermId]) {
-    setTimeout(() => _terminals[_activeTermId].fitAddon.fit(), 50);
+    setTimeout(() => _syncTermResize(_terminals[_activeTermId]), 50);
   }
 }
 
@@ -3262,27 +3270,59 @@ function spawnTerminal() {
   xterm.open(termEl);
   setTimeout(() => fitAddon.fit(), 10);
 
-  const ws = new WebSocket(wsUrl);
-  ws.onopen = () => {
-    const { cols, rows } = xterm;
-    ws.send(JSON.stringify({ type: 'resize', cols, rows }));
-  };
-  ws.onmessage = e => {
-    try {
-      const msg = JSON.parse(e.data);
-      if (msg.type === 'output') xterm.write(msg.data);
-      if (msg.type === 'exit')   xterm.write('\r\n\x1b[33m[Process exited]\x1b[0m\r\n');
-    } catch { xterm.write(e.data); }
-  };
-  ws.onclose = () => xterm.write('\r\n\x1b[31m[Disconnected]\x1b[0m\r\n');
+  // Wire (or re-wire) a WebSocket onto the existing xterm instance.
+  // Called once at spawn time, then again on each reconnect attempt.
+  let _reconnectAttempts = 0;
+  const MAX_RECONNECTS = 5;
 
-  xterm.onData(data => {
-    if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'input', data }));
-  });
+  function connectWs() {
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      _reconnectAttempts = 0;
+      const { cols, rows } = xterm;
+      ws.send(JSON.stringify({ type: 'resize', cols, rows }));
+    };
+
+    ws.onmessage = e => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'output') xterm.write(msg.data);
+        if (msg.type === 'exit')   xterm.write('\r\n\x1b[33m[Process exited]\x1b[0m\r\n');
+      } catch { xterm.write(e.data); }
+    };
+
+    ws.onclose = () => {
+      const t = _terminals[id];
+      // Skip reconnect if the tab was intentionally closed by the user
+      if (!t || t.closed) return;
+
+      if (_reconnectAttempts < MAX_RECONNECTS) {
+        _reconnectAttempts++;
+        xterm.write(`\r\n\x1b[33m[Reconnecting… attempt ${_reconnectAttempts}/${MAX_RECONNECTS}]\x1b[0m\r\n`);
+        setTimeout(() => {
+          const newWs = connectWs();
+          if (_terminals[id]) {
+            _terminals[id].ws = newWs;
+          }
+        }, 2000);
+      } else {
+        xterm.write('\r\n\x1b[31m[Disconnected — close this tab to retry]\x1b[0m\r\n');
+      }
+    };
+
+    xterm.onData(data => {
+      if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'input', data }));
+    });
+
+    return ws;
+  }
+
+  const ws = connectWs();
 
   const ro = new ResizeObserver(() => {
     fitAddon.fit();
-    if (ws.readyState === 1) {
+    if (ws.readyState === 1 && xterm.cols > 0) {
       ws.send(JSON.stringify({ type: 'resize', cols: xterm.cols, rows: xterm.rows }));
     }
   });
@@ -3300,13 +3340,14 @@ function switchTerminalTab(id) {
   Object.values(_terminals).forEach(term => { term.el.style.display = 'none'; });
   t.el.style.display = 'block';
   _activeTermId = id;
-  setTimeout(() => t.fitAddon.fit(), 20);
+  setTimeout(() => _syncTermResize(t), 20);
   renderTray();
 }
 
 function closeTerminalTab(id) {
   const t = _terminals[id];
   if (!t) return;
+  t.closed = true; // signal reconnect handler not to retry
   try { t.ws.close(); t.xterm.dispose(); t.ro.disconnect(); t.el.remove(); } catch { /* ignore */ }
   delete _terminals[id];
   const remaining = Object.keys(_terminals);
@@ -3339,7 +3380,7 @@ function initTerminalResize() {
     if (!dragging) return;
     const delta = startY - e.clientY;   // drag up = increase height
     _applyTerminalHeight(startH + delta);
-    if (_activeTermId && _terminals[_activeTermId]) _terminals[_activeTermId].fitAddon.fit();
+    if (_activeTermId && _terminals[_activeTermId]) _syncTermResize(_terminals[_activeTermId]);
   });
 
   document.addEventListener('mouseup', () => {
@@ -3349,7 +3390,7 @@ function initTerminalResize() {
     document.body.style.userSelect = '';
     document.body.style.cursor = '';
     localStorage.setItem(TERM_HEIGHT_KEY, String(State.terminalHeight));
-    if (_activeTermId && _terminals[_activeTermId]) _terminals[_activeTermId].fitAddon.fit();
+    if (_activeTermId && _terminals[_activeTermId]) _syncTermResize(_terminals[_activeTermId]);
   });
 }
 

@@ -1978,5 +1978,19 @@ wss.on('connection', (ws, req) => {
     } catch { /* ignore malformed */ }
   });
 
-  ws.on('close', () => { try { term.kill(); } catch { /* already dead */ } });
+  // Keepalive: ping every 25s so NAT/OS doesn't silently drop the TCP connection.
+  // isAlive is reset to false before each ping and back to true when pong arrives.
+  // If a full cycle passes with no pong the socket is considered dead and terminated.
+  ws.isAlive = true;
+  ws.on('pong', () => { ws.isAlive = true; });
+  const pingInterval = setInterval(() => {
+    if (!ws.isAlive) { ws.terminate(); return; }
+    ws.isAlive = false;
+    ws.ping();
+  }, 25000);
+
+  ws.on('close', () => {
+    clearInterval(pingInterval);
+    try { term.kill(); } catch { /* already dead */ }
+  });
 });
