@@ -8,6 +8,7 @@ const State = {
   mode: 'global',        // 'global' | 'project'
   projectPath: '',
   currentTab: 'overview',
+  currentGroup: 'dashboard',  // active top-level tab group id
   theme: 'dark',
 
   // Data
@@ -132,8 +133,23 @@ function formatCost(n) {
 }
 
 // ─── Tab Definitions ──────────────────────────────────────────
-const TABS_GLOBAL  = ['overview','commands','skills','rules','hooks','agents','plans','sessions','settings','mcp','stats','raw','editor'];
-const TABS_PROJECT = ['map','overview','skills','commands','rules','hooks','agents','sessions','git','settings','mcp','raw','editor'];
+const TAB_GROUPS_GLOBAL = [
+  { id: 'dashboard', label: 'Dashboard', icon: '⊞', tabs: ['overview'] },
+  { id: 'config',    label: 'Config',    icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
+  { id: 'activity',  label: 'Activity',  icon: '◷', tabs: ['sessions', 'plans'] },
+  { id: 'editor',    label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+];
+
+const TAB_GROUPS_PROJECT = [
+  { id: 'dashboard', label: 'Dashboard', icon: '◈', tabs: ['map'] },
+  { id: 'config',    label: 'Config',    icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
+  { id: 'activity',  label: 'Activity',  icon: '◷', tabs: ['sessions', 'git'] },
+  { id: 'editor',    label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+];
+
+// Flat arrays derived for backward compat (URL routing, popstate, etc.)
+const TABS_GLOBAL  = TAB_GROUPS_GLOBAL.flatMap(g => g.tabs);
+const TABS_PROJECT = TAB_GROUPS_PROJECT.flatMap(g => g.tabs);
 
 const TAB_META = {
   map:      { label: 'Map',     icon: '◈' },
@@ -147,7 +163,7 @@ const TAB_META = {
   stats:    { label: 'Stats',    icon: '▤' },
   raw:      { label: 'Raw',      icon: '{ }' },
   git:      { label: 'Git',      icon: '⎇' },
-  editor:   { label: 'Editor',   icon: '✎' },
+  editor:   { label: 'Code Editor', icon: '✎' },
   rules:    { label: 'Rules',   icon: '⊘' },
   hooks:    { label: 'Hooks',   icon: '⚓' },
   agents:   { label: 'Agents',  icon: '◎' },
@@ -155,6 +171,31 @@ const TAB_META = {
 
 function getCurrentTabs() {
   return State.mode === 'project' ? TABS_PROJECT : TABS_GLOBAL;
+}
+
+function getTabGroups() {
+  return State.mode === 'project' ? TAB_GROUPS_PROJECT : TAB_GROUPS_GLOBAL;
+}
+
+function syncGroupFromTab(tab) {
+  const groups = getTabGroups();
+  const g = groups.find(gr => gr.tabs.includes(tab));
+  if (g) State.currentGroup = g.id;
+}
+
+function navigateGroup(groupId) {
+  const groups = getTabGroups();
+  const g = groups.find(gr => gr.id === groupId);
+  if (!g) return;
+  State.currentGroup = groupId;
+  if (!g.tabs.includes(State.currentTab)) {
+    State.currentTab = g.tabs[0];
+    State.shareMode  = false;
+    State.shareItems = new Map();
+  }
+  State.activeNodeId = null;
+  updateUrl();
+  renderApp();
 }
 
 // ─── API Client ───────────────────────────────────────────────
@@ -300,6 +341,13 @@ function projectName(p) {
   return p ? (p.split('/').pop() || p) : '';
 }
 
+function projectAbbrev(name) {
+  if (!name) return '??';
+  const parts = name.split(/[-_ .]+/).filter(Boolean);
+  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.slice(0, 2).toUpperCase();
+}
+
 // ─── Theme ────────────────────────────────────────────────────
 function initTheme() {
   const saved = localStorage.getItem('claude-map-theme') || 'dark';
@@ -316,10 +364,34 @@ function applyTheme(t) {
   if (lightLink) lightLink.disabled = (t === 'dark');
   const btn = document.getElementById('theme-toggle');
   if (btn) btn.title = t === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+  // Keep PWA theme-color in sync with current theme
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) metaTheme.content = t === 'dark' ? '#141418' : '#fafafa';
 }
 
 function toggleTheme() {
   applyTheme(State.theme === 'dark' ? 'light' : 'dark');
+}
+
+// ─── Collapsible Sidebar ──────────────────────────────────────
+function toggleSidebarCollapse() {
+  const shell = document.querySelector('.app-shell');
+  if (!shell) return;
+  shell.classList.toggle('sidebar-collapsed');
+  const collapsed = shell.classList.contains('sidebar-collapsed');
+  const btn = document.querySelector('.sidebar-collapse-btn');
+  if (btn) btn.textContent = collapsed ? '»' : '«';
+  try { localStorage.setItem('claude-map-sidebar-collapsed', collapsed ? '1' : ''); } catch {}
+}
+
+function restoreSidebarState() {
+  try {
+    if (localStorage.getItem('claude-map-sidebar-collapsed') === '1') {
+      document.querySelector('.app-shell')?.classList.add('sidebar-collapsed');
+      const btn = document.querySelector('.sidebar-collapse-btn');
+      if (btn) btn.textContent = '»';
+    }
+  } catch {}
 }
 
 // ─── Mobile Sidebar ───────────────────────────────────────────
@@ -338,6 +410,7 @@ function selectGlobal() {
   State.mode        = 'global';
   State.projectPath = '';
   State.currentTab  = 'overview';
+  State.currentGroup = 'dashboard';
   State.analysis    = null;
   State.activeNodeId = null;
   State.editorFileTree = null;
@@ -348,6 +421,7 @@ function selectGlobal() {
   _leaveEditorTab();
 
   closeMobileSidebar();
+  updateUrl();
   if (!State.scan) {
     loadGlobal();
   } else {
@@ -378,6 +452,7 @@ async function selectProject(path) {
   State.mode        = 'project';
   State.projectPath = path;
   State.currentTab  = 'map';
+  State.currentGroup = 'dashboard';
   State.activeNodeId = null;
   State.analysis    = null;
   State.analysisLoading = true;
@@ -426,9 +501,113 @@ function navigate(tab) {
     State.shareItems = new Map();
   }
   State.currentTab = tab;
+  syncGroupFromTab(tab);
   State.activeNodeId = null;
+  updateUrl();
   renderApp();
 }
+
+// ─── URL Routing ──────────────────────────────────────────────
+let _suppressUrlUpdate = false;
+
+// Slug helpers — store slug→fullPath in localStorage so short names survive page reload
+function getProjectSlug(fullPath) {
+  return fullPath.split('/').filter(Boolean).pop() || 'project';
+}
+
+function saveProjectSlug(fullPath) {
+  try {
+    const map = JSON.parse(localStorage.getItem('claude-map-slugs') || '{}');
+    map[getProjectSlug(fullPath)] = fullPath;
+    localStorage.setItem('claude-map-slugs', JSON.stringify(map));
+  } catch {}
+}
+
+function resolveProjectSlug(slug) {
+  // 1. localStorage slug map (fastest, survives reload)
+  try {
+    const map = JSON.parse(localStorage.getItem('claude-map-slugs') || '{}');
+    if (map[slug]) return map[slug];
+  } catch {}
+  // 2. search pinned + scanned projects by folder name
+  const all = [
+    ...(State.pinnedProjects || []),
+    ...(State.scan?.global?.projects?.map(p => p.decodedPath).filter(Boolean) || []),
+  ];
+  return all.find(p => getProjectSlug(p) === slug) || null;
+}
+
+function buildUrl() {
+  const params = new URLSearchParams();
+  if (State.mode === 'project' && State.projectPath) {
+    params.set('project', getProjectSlug(State.projectPath));
+  }
+  if (State.currentTab && State.currentTab !== 'overview') {
+    params.set('tab', State.currentTab);
+  }
+  const qs = params.toString();
+  return qs ? `/?${qs}` : '/';
+}
+
+function updateUrl(replace = false) {
+  if (_suppressUrlUpdate) return;
+  const url = buildUrl();
+  if (replace) {
+    history.replaceState(null, '', url);
+  } else {
+    history.pushState(null, '', url);
+  }
+}
+
+window.addEventListener('popstate', () => {
+  _suppressUrlUpdate = true;
+  const params = new URLSearchParams(location.search);
+  const slug   = params.get('project');
+  const tab    = params.get('tab');
+
+  if (slug) {
+    const fullPath = resolveProjectSlug(slug);
+    if (fullPath && State.mode === 'project' && State.projectPath === fullPath) {
+      // Same project — instant tab switch
+      const t = (tab && TABS_PROJECT.includes(tab)) ? tab : 'map';
+      State.currentTab = t;
+      syncGroupFromTab(t);
+      State.activeNodeId = null;
+      _suppressUrlUpdate = false;
+      renderApp();
+    } else if (fullPath) {
+      selectProject(fullPath).then(() => {
+        if (tab && TABS_PROJECT.includes(tab)) {
+          State.currentTab = tab;
+          syncGroupFromTab(tab);
+          renderApp();
+        }
+        _suppressUrlUpdate = false;
+      });
+    } else {
+      // Slug not resolvable — fall back to global
+      selectGlobal();
+      _suppressUrlUpdate = false;
+    }
+  } else {
+    if (State.mode === 'global') {
+      const t = (tab && TABS_GLOBAL.includes(tab)) ? tab : 'overview';
+      State.currentTab = t;
+      syncGroupFromTab(t);
+      State.activeNodeId = null;
+      _suppressUrlUpdate = false;
+      renderApp();
+    } else {
+      selectGlobal();
+      if (tab && TABS_GLOBAL.includes(tab)) {
+        State.currentTab = tab;
+        syncGroupFromTab(tab);
+        renderApp();
+      }
+      _suppressUrlUpdate = false;
+    }
+  }
+});
 
 // ─── Render Pipeline ──────────────────────────────────────────
 function renderApp() {
@@ -456,27 +635,42 @@ function renderTabBar() {
   const tabBar = document.getElementById('tab-bar');
   if (!tabBar) return;
 
-  const tabs = getCurrentTabs();
+  const groups = getTabGroups();
+  const label = isProject ? projectName(State.projectPath) : 'Global';
 
-  function renderTab(id) {
+  // Aggregate badge count for a group (sum of child tab counts)
+  function groupBadge(group) {
+    const total = group.tabs.reduce((s, t) => s + (counts[t] || 0), 0);
+    return total > 0 ? `<span class="tab-badge">${total}</span>` : '';
+  }
+
+  // Tier 1: group-level tabs
+  const tier1 = groups.map(gr => {
+    const active = gr.id === State.currentGroup;
+    return `<div class="tab-group-item ${active ? 'active' : ''}" onclick="navigateGroup('${gr.id}')">
+      <span class="tab-icon">${gr.icon}</span>${gr.label}${groupBadge(gr)}
+    </div>`;
+  }).join('');
+
+  // Tier 2: sub-tabs for active group
+  const activeGroup = groups.find(gr => gr.id === State.currentGroup) || groups[0];
+  const tier2 = activeGroup.tabs.map(id => {
     const meta   = TAB_META[id] || { label: id };
     const active = id === State.currentTab;
     const badge  = counts[id] != null && counts[id] > 0
       ? `<span class="tab-badge">${counts[id]}</span>` : '';
-    return `<div class="tab-item ${active ? 'active' : ''}" onclick="navigate('${id}')">
-      <span class="tab-icon">${meta.icon || ''}</span>${meta.label}${badge}
+    return `<div class="tab-sub-item ${active ? 'active' : ''}" onclick="navigate('${id}')">
+      ${meta.label}${badge}
     </div>`;
-  }
-
-  const label = isProject
-    ? projectName(State.projectPath)
-    : 'Global';
+  }).join('');
 
   tabBar.innerHTML = `
-    <div class="tab-group">
+    <div class="tab-tier1">
       <span class="tab-group-label" title="${isProject ? escapeAttr(State.projectPath) : '~/.claude/'}">${escapeHtml(label)}</span>
-      ${tabs.map(renderTab).join('')}
-    </div>`;
+      <span class="tab-tier1-divider"></span>
+      ${tier1}
+    </div>
+    ${activeGroup.tabs.length > 1 ? `<div class="tab-tier2">${tier2}</div>` : ''}`;
 }
 
 function renderTabContent() {
@@ -485,7 +679,8 @@ function renderTabContent() {
 
   if (State.currentTab === 'map' && State.mode === 'project') {
     el.innerHTML = renderMapTab();
-    requestAnimationFrame(() => drawMapSvgLines());
+    // Double rAF ensures layout is complete before measuring node positions for SVG lines
+    requestAnimationFrame(() => { requestAnimationFrame(() => { drawMapSvgLines(); }); });
     return;
   }
 
@@ -523,7 +718,7 @@ function renderTabContent() {
   if (State.currentTab === 'git' && State.mode === 'project' && !State.gitStatus && !State.gitStatusLoading) {
     loadGitTab();
   }
-  if (State.currentTab === 'stats' || State.currentTab === 'overview') {
+  if (State.currentTab === 'stats' || State.currentTab === 'overview' || State.currentTab === 'map') {
     requestAnimationFrame(() => initStatsChart());
   }
   if (State.currentTab === 'editor') {
@@ -534,7 +729,15 @@ function renderTabContent() {
 
 // ─── State renders ────────────────────────────────────────────
 function renderLoading() {
-  return `<div class="loading-state"><div class="spinner"></div><p>Scanning configuration…</p></div>`;
+  return `<div style="padding:14px 18px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:16px">
+      ${Array(4).fill('<div class="skeleton skeleton-metric"></div>').join('')}
+    </div>
+    ${Array(3).fill('<div class="skeleton skeleton-card"></div>').join('')}
+    <div class="skeleton skeleton-text long"></div>
+    <div class="skeleton skeleton-text medium"></div>
+    <div class="skeleton skeleton-text short"></div>
+  </div>`;
 }
 
 function renderError(err) {
@@ -582,7 +785,6 @@ function toggleCard(id) {
   const body = document.getElementById(`body-${id}`);
   if (!card || !body) return;
   const isOpen = body.classList.toggle('visible');
-  body.classList.toggle('hidden', !isOpen);
   card.classList.toggle('expanded', isOpen);
 
   if (isOpen && !body.dataset.rendered) {
@@ -634,9 +836,10 @@ function renderProjectList() {
 
   // Global Config entry (always first)
   const isGlobal = State.mode === 'global';
-  html += `<div class="sidebar-project-item ${isGlobal ? 'active' : ''}" onclick="selectGlobal()">
+  html += `<div class="sidebar-project-item global-entry ${isGlobal ? 'active' : ''}" onclick="selectGlobal()">
     <span class="proj-status-icon full">◈</span>
     <span class="proj-name">Global Config</span>
+    <span class="proj-abbrev proj-abbrev-global"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
   </div>`;
 
   // Pinned section
@@ -669,10 +872,12 @@ function renderProjectItem(path, pinned) {
     ? `<button class="remove-pin" title="Remove" onclick="event.stopPropagation();removePinnedProject('${escapeAttr(path)}')">×</button>`
     : '';
 
+  const abbrev = projectAbbrev(name);
   return `<div class="sidebar-project-item ${isActive ? 'active' : ''}"
              onclick="selectProject('${escapeAttr(path)}')" title="${escapeAttr(path)}">
     <span class="${iconClass}">${icon}</span>
     <span class="proj-name">${escapeHtml(name)}</span>
+    <span class="proj-abbrev">${escapeHtml(abbrev)}</span>
     ${removeBtn}
   </div>`;
 }
@@ -733,6 +938,8 @@ async function addPinnedProject(path) {
 }
 
 async function removePinnedProject(path) {
+  const name = projectName(path);
+  if (!confirm(`Remove "${name}" from pinned projects?`)) return;
   try {
     const data = await fetch('/api/pinned-projects', {
       method: 'DELETE',
@@ -862,7 +1069,8 @@ function renderMapTab() {
       </div>
       <div class="map-detail-body">${detailHtml}</div>
     </div>` : ''}
-  </div>`;
+  </div>
+  ${renderProjectOverview()}`;
 }
 
 function getNodeTitle(nodeId, analysis) {
@@ -886,13 +1094,11 @@ function getNodeTitle(nodeId, analysis) {
 function onMapNodeClick(nodeId) {
   State.activeNodeId = State.activeNodeId === nodeId ? null : nodeId;
   renderTabContent();
-  requestAnimationFrame(() => drawMapSvgLines());
 }
 
 function onMapNodeClose() {
   State.activeNodeId = null;
   renderTabContent();
-  requestAnimationFrame(() => drawMapSvgLines());
 }
 
 function renderNodeDetailPanel(nodeId, analysis) {
@@ -1023,9 +1229,10 @@ function drawMapSvgLines() {
   if (!svg || !container) return;
 
   const cRect = container.getBoundingClientRect();
+  console.log('[map-svg] container rect:', cRect.width, 'x', cRect.height, '| defs:', State._mapConnectionDefs.length);
   svg.setAttribute('width',  cRect.width);
   svg.setAttribute('height', cRect.height);
-  svg.innerHTML = '';
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
 
   // CSS vars for colors
   const style = getComputedStyle(document.documentElement);
@@ -1046,7 +1253,7 @@ function drawMapSvgLines() {
   State._mapConnectionDefs.forEach(def => {
     const from = getCenterOf(def.from);
     const to   = getCenterOf(def.to);
-    if (!from || !to) return;
+    if (!from || !to) { console.log('[map-svg] SKIP:', def.from, '->', def.to, 'from:', from, 'to:', to); return; }
 
     const midY = (from.y + to.y) / 2;
     const d    = `M ${from.x} ${from.y} C ${from.x} ${midY}, ${to.x} ${midY}, ${to.x} ${to.y}`;
@@ -1187,13 +1394,47 @@ function renderGlobalOverview() {
       </div>`
     : `${chartHtml}${modelHtml}${hourHtml}`;
 
+  // Tool usage (from stats tab)
+  const toolHtml = stats ? (State.statsToolData
+    ? renderToolBreakdown(State.statsToolData.toolUsage, `${State.statsToolData.sessionsScanned} sessions scanned`)
+    : `<div class="section">
+        <div class="section-title">Tool Usage</div>
+        <button class="btn-secondary" onclick="loadToolStats()" ${State.statsToolLoading ? 'disabled' : ''}>
+          ${State.statsToolLoading ? 'Scanning sessions…' : 'Load Tool Analytics'}
+        </button>
+      </div>`) : '';
+
+  // Daily detail table (from stats tab)
+  const sorted = [...daily].sort((a, b) => b.date.localeCompare(a.date));
+  const dailyTableHtml = sorted.length ? `<div class="section">
+    <div class="section-title">Daily Detail</div>
+    <table class="data-table">
+      <thead><tr>
+        <th>Date</th>
+        <th style="text-align:right">Messages</th>
+        <th style="text-align:right">Tool Calls</th>
+        <th style="text-align:right">Sessions</th>
+      </tr></thead>
+      <tbody>${sorted.slice(0, 30).map(d =>
+        `<tr>
+          <td style="color:var(--text-secondary)">${d.date}</td>
+          <td style="text-align:right">${formatNum(d.messageCount)}</td>
+          <td style="text-align:right">${formatNum(d.toolCallCount)}</td>
+          <td style="text-align:right">${d.sessionCount}</td>
+        </tr>`
+      ).join('')}</tbody>
+    </table>
+  </div>` : '';
+
   return `
     ${usageRow}
     ${configRow}
     ${statsLayout}
+    ${State.statsToolData ? `<div class="section"><div class="section-title">Tool Usage</div>${toolHtml}</div>` : toolHtml}
     ${configGrid}
     ${claudeMdHtml}
     ${addDirsHtml}
+    ${dailyTableHtml}
     ${projectsHtml}
   `;
 }
@@ -1386,15 +1627,29 @@ function renderCommands() {
   const filteredLocal  = localCommands.filter(filterCmd);
 
   const localSection = isProject && localCommands.length ? `
-    <div class="section-title" style="margin:16px 0 8px">Project-local Commands</div>
+    <div class="section-row">
+      <div class="section-title">Project-local Commands</div>
+      <button class="btn-icon cmd-share-all-btn" onclick="shareCommandSet('local', this)" title="Copy all project commands as shareable JSON">
+        ↓ .zip (${localCommands.length})
+      </button>
+    </div>
     <div class="cards-grid">
       ${filteredLocal.length
         ? filteredLocal.map(c => renderCommandCard(c, 'lcmd_', 'project')).join('')
         : `<div class="empty-state" style="min-height:80px"><p>No local commands match "<strong>${escapeHtml(q)}</strong>"</p></div>`}
     </div>` : '';
 
+  const globalSectionLabel = isProject && localCommands.length
+    ? `<div class="section-row">
+        <div class="section-title">Global Commands</div>
+        <button class="btn-icon cmd-share-all-btn" onclick="shareCommandSet('global', this)" title="Copy all global commands as shareable JSON">
+          ↓ .zip (${globalCommands.length})
+        </button>
+      </div>`
+    : '';
+
   const globalSection = `
-    ${isProject && localCommands.length ? `<div class="section-title" style="margin:16px 0 8px">Global Commands</div>` : ''}
+    ${globalSectionLabel}
     <div class="cards-grid">
       ${filteredGlobal.length
         ? filteredGlobal.map(c => renderCommandCard(c, 'cmd_', 'global')).join('')
@@ -1402,6 +1657,10 @@ function renderCommands() {
           ? `<div class="empty-state" style="min-height:80px"><p>No global commands match "<strong>${escapeHtml(q)}</strong>"</p></div>`
           : `<div class="empty-state" style="min-height:80px"><p>No global commands</p></div>`}
     </div>`;
+
+  const shareAllBtn = !isProject && globalCommands.length
+    ? `<button class="btn-icon cmd-share-all-btn" onclick="shareCommandSet('global', this)" title="Download all commands as .zip">↓ .zip</button>`
+    : '';
 
   return `<div>
     <div class="tab-header">
@@ -3260,6 +3519,7 @@ function spawnTerminal() {
         }
         openEditorFile(resolved);
         State.currentTab = 'editor';
+        syncGroupFromTab('editor');
         renderApp();
       },
       { urlRegex: filePathRegex }
@@ -3984,13 +4244,67 @@ function handleImportDrop(event) {
   event.preventDefault();
   event.currentTarget.classList.remove('dragover');
   const file = event.dataTransfer?.files?.[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = () => {
-    document.getElementById('import-textarea').value = reader.result;
-    previewImport();
-  };
-  reader.readAsText(file);
+  if (file) loadImportFile(file);
+}
+
+function handleImportFileSelect(event) {
+  const file = event.target.files?.[0];
+  if (file) loadImportFile(file);
+  event.target.value = ''; // reset so same file can be re-selected
+}
+
+async function loadImportFile(file) {
+  const dropZone = document.getElementById('import-drop-zone');
+  const label = dropZone?.querySelector('.import-drop-label');
+  if (label) label.textContent = file.name;
+
+  if (file.name.endsWith('.zip')) {
+    try {
+      const zip = await JSZip.loadAsync(file);
+      const commands = [];
+      const skills = [];
+      let claudeMd = null;
+      const tasks = [];
+
+      zip.forEach((relPath, entry) => {
+        if (entry.dir) return;
+        tasks.push(entry.async('string').then(content => {
+          const lower = relPath.toLowerCase();
+          const name  = relPath.split('/').pop().replace(/\.md$/i, '');
+          if (lower.startsWith('commands/') || lower.startsWith('command/')) {
+            commands.push({ name, content });
+          } else if (lower.startsWith('skills/') || lower.startsWith('skill/')) {
+            skills.push({ name, content });
+          } else if (lower === 'claude.md') {
+            claudeMd = content;
+          } else if (lower.endsWith('.md')) {
+            // unknown folder — treat as command
+            commands.push({ name, content });
+          }
+        }));
+      });
+
+      await Promise.all(tasks);
+      const bundle = JSON.stringify({
+        type: 'claude-map-bundle',
+        version: '1',
+        ...(commands.length ? { commands } : {}),
+        ...(skills.length   ? { skills }   : {}),
+        ...(claudeMd        ? { claudeMd } : {}),
+      }, null, 2);
+      document.getElementById('import-textarea').value = bundle;
+      previewImport();
+    } catch (e) {
+      alert('Could not read ZIP: ' + e.message);
+    }
+  } else {
+    const reader = new FileReader();
+    reader.onload = () => {
+      document.getElementById('import-textarea').value = reader.result;
+      previewImport();
+    };
+    reader.readAsText(file);
+  }
 }
 
 function previewImport() {
@@ -4106,6 +4420,53 @@ async function confirmBundleExport() {
     URL.revokeObjectURL(url);
   } catch (e) { alert('Export failed: ' + e.message); }
   closeBundleModal();
+}
+
+// ─── Share / Download Commands ────────────────────────────────
+function triggerDownload(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function shareCommandByName(btn, name) {
+  const allCmds = [
+    ...(State.scan?.global?.commands || []),
+    ...(State.scan?.project?.localCommands || []),
+  ];
+  const cmd = allCmds.find(c => c.name === name);
+  if (!cmd) return;
+  const blob = new Blob([cmd.body], { type: 'text/markdown' });
+  triggerDownload(`${name}.md`, blob);
+  const orig = btn.textContent;
+  btn.textContent = '✓ Saved';
+  btn.classList.add('copied');
+  setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
+}
+
+async function shareCommandSet(scope, btn) {
+  const cmds = scope === 'local'
+    ? State.scan?.project?.localCommands || []
+    : State.scan?.global?.commands || [];
+  if (!cmds.length) return;
+
+  const zip = new JSZip();
+  const folder = zip.folder('commands');
+  cmds.forEach(c => folder.file(`${c.name}.md`, c.body));
+  const blob = await zip.generateAsync({ type: 'blob' });
+
+  const label = scope === 'local'
+    ? (projectName(State.projectPath) || 'project')
+    : 'global';
+  triggerDownload(`claude-commands-${label}.zip`, blob);
+
+  const orig = btn.textContent;
+  btn.textContent = `✓ Downloaded`;
+  btn.classList.add('copied');
+  setTimeout(() => { btn.textContent = orig; btn.classList.remove('copied'); }, 1500);
 }
 
 // ─── Export & Refresh ─────────────────────────────────────────
@@ -4266,8 +4627,42 @@ async function browserNavigate(dirPath) {
 }
 
 // ─── Init ─────────────────────────────────────────────────────
+async function initFromUrl() {
+  const params = new URLSearchParams(location.search);
+  const slug   = params.get('project');
+  const tab    = params.get('tab');
+
+  await loadPinnedProjects();
+
+  if (slug) {
+    const fullPath = resolveProjectSlug(slug);
+    if (fullPath) {
+      await selectProject(fullPath);
+      if (tab && TABS_PROJECT.includes(tab)) {
+        State.currentTab = tab;
+        syncGroupFromTab(tab);
+        renderApp();
+      }
+    } else {
+      // Slug not found — load global silently
+      await loadGlobal();
+    }
+  } else {
+    await loadGlobal();
+    if (tab && TABS_GLOBAL.includes(tab)) {
+      State.currentTab = tab;
+      syncGroupFromTab(tab);
+      renderApp();
+    }
+  }
+
+  // Normalize URL to canonical form without pushing a new history entry
+  history.replaceState(null, '', buildUrl());
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
+  restoreSidebarState();
   initSSE();
   loadPinnedProjects().then(() => loadGlobal());
 
@@ -4277,6 +4672,7 @@ document.addEventListener('DOMContentLoaded', () => {
       e.preventDefault();
       if (State.currentTab !== 'editor') {
         State.currentTab = 'editor';
+        syncGroupFromTab('editor');
         renderApp();
       }
       const panel = document.getElementById('terminal-panel');

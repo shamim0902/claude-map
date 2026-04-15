@@ -4,10 +4,21 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claude Map</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#141418">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Claude Map">
+  <link rel="apple-touch-icon" href="/logo.png">
+
   <link rel="icon" href="/logo.png" type="image/png">
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/style.css?v=2">
   <link id="hljs-dark"  rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
   <link id="hljs-light" rel="stylesheet" href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css" disabled>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
   <div class="app-shell">
@@ -17,9 +28,11 @@
       <div class="sidebar-brand" onclick="selectGlobal()" style="cursor:pointer" title="Go to Global Dashboard">
         <img src="/logo.png" alt="Claude Map" class="brand-logo">
         <div class="brand-actions">
+          <button id="pwa-install-btn" class="pwa-install-btn" onclick="event.stopPropagation();pwaTriggerInstall()" title="Install as desktop app">↓ Install</button>
           <button class="btn-theme-toggle" id="theme-toggle"
                   onclick="event.stopPropagation();toggleTheme()" title="Switch to light mode">◑</button>
         </div>
+        <button class="sidebar-collapse-btn" onclick="event.stopPropagation();toggleSidebarCollapse()" title="Collapse sidebar">«</button>
       </div>
 
       <div class="sidebar-section projects-panel">
@@ -132,8 +145,12 @@
         <div id="import-drop-zone" class="import-drop-zone"
              ondragover="event.preventDefault();this.classList.add('dragover')"
              ondragleave="this.classList.remove('dragover')"
-             ondrop="handleImportDrop(event)">
-          Drop .md or .json file here
+             ondrop="handleImportDrop(event)"
+             onclick="document.getElementById('import-file-input').click()">
+          <span class="import-drop-label">Drop or click to upload</span>
+          <span class="import-drop-sub">.md · .json · .zip</span>
+          <input type="file" id="import-file-input" accept=".md,.json,.zip"
+                 style="display:none" onchange="handleImportFileSelect(event)">
         </div>
         <textarea id="import-textarea" class="import-textarea"
                   placeholder="Or paste skill/command markdown or bundle JSON here…"
@@ -222,6 +239,40 @@
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/bash.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/php.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/lib/languages/markdown.min.js"></script>
-  <script src="/app.js"></script>
+  <script src="/app.js?v=2"></script>
+  <script>
+    // ── Service Worker ──────────────────────────────────────────
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js').catch(() => {});
+    }
+
+    // ── PWA Install Prompt ──────────────────────────────────────
+    let _pwaInstallPrompt = null;
+
+    window.addEventListener('beforeinstallprompt', e => {
+      e.preventDefault();
+      _pwaInstallPrompt = e;
+      const btn = document.getElementById('pwa-install-btn');
+      if (btn) btn.classList.add('visible');
+    });
+
+    window.pwaTriggerInstall = async () => {
+      if (!_pwaInstallPrompt) return;
+      _pwaInstallPrompt.prompt();
+      const { outcome } = await _pwaInstallPrompt.userChoice;
+      if (outcome === 'accepted') {
+        const btn = document.getElementById('pwa-install-btn');
+        if (btn) btn.classList.remove('visible');
+        _pwaInstallPrompt = null;
+      }
+    };
+
+    // Hide install button if already running as PWA
+    window.addEventListener('appinstalled', () => {
+      const btn = document.getElementById('pwa-install-btn');
+      if (btn) btn.classList.remove('visible');
+      _pwaInstallPrompt = null;
+    });
+  </script>
 </body>
 </html>
