@@ -773,6 +773,8 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .session-copy-btn { flex-shrink: 0; font-size: 11px; padding: 3px 10px; }
 .session-copy-btn.copied { color: var(--accent-green); border-color: var(--accent-green); }
+.session-run-btn { flex-shrink: 0; font-size: 11px; padding: 3px 10px; color: var(--accent-teal); border-color: var(--accent-teal); }
+.session-run-btn:hover { background: rgba(0,212,170,0.1); }
 
 /* Share commands */
 .section-row { display: flex; align-items: center; justify-content: space-between; margin: 16px 0 8px; }

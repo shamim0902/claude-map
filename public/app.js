@@ -3798,6 +3798,7 @@ function renderSessionsList() {
               <div class="session-card-actions">
                 <code class="session-resume-cmd">${escapeHtml(resumeCmd)}</code>
                 <button class="btn-icon session-copy-btn" onclick="copyResumeCmd('${escapeAttr(s.id)}', this)" title="Copy resume command">Copy</button>
+                <button class="btn-icon session-run-btn" onclick="runResumeCmd('${escapeAttr(s.id)}', this)" title="Run in terminal">▶ Run</button>
               </div>
             </div>`;
           }).join('')
@@ -3821,6 +3822,43 @@ function copyResumeCmd(sessionId, btn) {
     btn.classList.add('copied');
     setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
   });
+}
+
+function runResumeCmd(sessionId, btn) {
+  const cmd = `claude --resume ${sessionId}`;
+
+  const sendCmd = () => {
+    const t = _activeTermId && _terminals[_activeTermId];
+    if (t && t.ws.readyState === 1) {
+      t.ws.send(JSON.stringify({ type: 'input', data: cmd + '\r' }));
+      return true;
+    }
+    return false;
+  };
+
+  navigate('editor');
+
+  if (Object.keys(_terminals).length === 0) {
+    trayNewTerminal();
+    let attempts = 0;
+    const poll = setInterval(() => {
+      if (sendCmd() || ++attempts > 40) clearInterval(poll);
+    }, 100);
+  } else {
+    expandTerminal();
+    if (!sendCmd()) {
+      // WS not ready yet — wait briefly
+      let attempts = 0;
+      const poll = setInterval(() => {
+        if (sendCmd() || ++attempts > 20) clearInterval(poll);
+      }, 100);
+    }
+  }
+
+  if (btn) {
+    btn.textContent = '▶ Sent';
+    setTimeout(() => { btn.textContent = '▶ Run'; }, 1500);
+  }
 }
 
 async function loadSessionsList() {
