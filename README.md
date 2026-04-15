@@ -32,7 +32,7 @@ Or run without installing:
 npx claude-map
 ```
 
-Then open **http://localhost:3131** in your browser.
+Then open **http://localhost:8888** in your browser.
 
 > **Note:** `node-pty` requires a native build. If the terminal doesn't work after install, run:
 > ```bash
