@@ -58,6 +58,7 @@ const State = {
   // Editor
   editorPath: null,
   editorDirty: false,
+  editorPreviewMode: false,
   editorFileTree: null,
   editorFileTreeLoading: false,
 
@@ -292,6 +293,20 @@ const API = {
 };
 
 // ─── Utils ────────────────────────────────────────────────────
+// Debounced filter helper — updates state immediately, delays re-render by 200ms,
+// then restores focus + cursor to the input so typing is never interrupted.
+let _filterTimer = null;
+function filterDebounce(stateKey, value, focusId) {
+  State[stateKey] = value;
+  clearTimeout(_filterTimer);
+  _filterTimer = setTimeout(() => {
+    const cursorPos = value.length;
+    renderTabContent();
+    const el = document.getElementById(focusId);
+    if (el) { el.focus(); el.setSelectionRange(cursorPos, cursorPos); }
+  }, 200);
+}
+
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
@@ -1442,13 +1457,13 @@ function renderGlobalOverview() {
 
   const claudeMdHtml = g.claudeMd
     ? `<div class="section">
-        <div class="claude-md-preview" onclick="toggleClaudeMdFull()">
+        <div class="claude-md-preview">
           <div class="section-title" style="margin-bottom:8px">CLAUDE.md — Global Instructions</div>
-          <div id="claude-md-excerpt" class="markdown-body" style="font-size:12px;padding-top:0">
-            ${g.claudeMd.excerpt ? escapeHtml(g.claudeMd.excerpt) : '<em>empty</em>'}
+          <div id="global-claude-md-excerpt" class="markdown-body claude-md-excerpt" style="font-size:12px;padding-top:0">
+            ${g.claudeMd.excerpt ? renderMarkdown(g.claudeMd.excerpt) : '<em>empty</em>'}
           </div>
-          <div id="claude-md-full" class="markdown-body" style="display:none"></div>
-          <div class="claude-md-toggle">▼ Expand full CLAUDE.md</div>
+          <div id="global-claude-md-full" class="markdown-body" style="display:none"></div>
+          <div class="claude-md-toggle" onclick="toggleClaudeMdFull('global')">▼ Expand full CLAUDE.md</div>
         </div>
       </div>` : '';
 
@@ -1575,13 +1590,13 @@ function renderProjectOverview() {
   const projClaudeMd = proj?.claudeMd;
   const claudeMdHtml = projClaudeMd
     ? `<div class="section">
-        <div class="claude-md-preview" onclick="toggleClaudeMdFull()">
+        <div class="claude-md-preview">
           <div class="section-title" style="margin-bottom:8px">CLAUDE.md — Project Instructions</div>
-          <div id="claude-md-excerpt" class="markdown-body" style="font-size:12px;padding-top:0">
-            ${projClaudeMd.excerpt ? escapeHtml(projClaudeMd.excerpt) : '<em>empty</em>'}
+          <div id="project-claude-md-excerpt" class="markdown-body claude-md-excerpt" style="font-size:12px;padding-top:0">
+            ${projClaudeMd.excerpt ? renderMarkdown(projClaudeMd.excerpt) : '<em>empty</em>'}
           </div>
-          <div id="claude-md-full" class="markdown-body" style="display:none"></div>
-          <div class="claude-md-toggle">▼ Expand full CLAUDE.md</div>
+          <div id="project-claude-md-full" class="markdown-body" style="display:none"></div>
+          <div class="claude-md-toggle" onclick="toggleClaudeMdFull('project')">▼ Expand full CLAUDE.md</div>
         </div>
       </div>` : '';
 
@@ -1685,18 +1700,19 @@ function renderHourlyHeatmap(stats) {
   </div>`;
 }
 
-function toggleClaudeMdFull() {
-  const excerpt = document.getElementById('claude-md-excerpt');
-  const full    = document.getElementById('claude-md-full');
-  const toggle  = document.querySelector('.claude-md-toggle');
+function toggleClaudeMdFull(scope) {
+  const excerpt = document.getElementById(`${scope}-claude-md-excerpt`);
+  const full    = document.getElementById(`${scope}-claude-md-full`);
+  const toggle  = full?.parentElement?.querySelector('.claude-md-toggle');
   if (!excerpt || !full) return;
-  const showing = full.style.display !== 'none';
-  excerpt.style.display = showing ? '' : 'none';
-  full.style.display    = showing ? 'none' : '';
-  if (toggle) toggle.textContent = showing ? '▼ Expand full CLAUDE.md' : '▲ Collapse';
-  if (!full.dataset.rendered) {
+  const expanding = full.style.display === 'none';
+  excerpt.style.display = expanding ? 'none' : '';
+  excerpt.classList.toggle('claude-md-excerpt', !expanding);
+  full.style.display = expanding ? '' : 'none';
+  if (toggle) toggle.textContent = expanding ? '▲ Collapse' : '▼ Expand full CLAUDE.md';
+  if (expanding && !full.dataset.rendered) {
     full.dataset.rendered = '1';
-    const raw = (State.mode === 'project'
+    const raw = (scope === 'project'
       ? State.scan.project?.claudeMd?.raw
       : State.scan.global?.claudeMd?.raw) || '';
     try { full.innerHTML = renderMarkdown(raw); }
@@ -1759,9 +1775,9 @@ function renderCommands() {
     <div class="tab-header">
       <h2>Commands <span class="badge">${totalCount}</span></h2>
       <div style="display:flex;gap:6px;align-items:center">
-        <input class="search-input" placeholder="Filter commands…"
+        <input id="command-filter-input" class="search-input" placeholder="Filter commands…"
                value="${escapeAttr(State.commandFilter)}"
-               oninput="State.commandFilter=this.value;renderTabContent()">
+               oninput="filterDebounce('commandFilter',this.value,'command-filter-input')">
         <button class="btn-icon${sm ? ' active' : ''}" onclick="toggleShareMode()" title="${sm ? 'Cancel share' : 'Share commands'}">⇥ Share</button>
       </div>
     </div>
@@ -1811,7 +1827,7 @@ function renderSkills() {
   const globalNames = new Set(globalSkills.map(s => s.name));
   const localNames  = new Set(localSkills.map(s => s.name));
 
-  const comparisonHtml = isProject && (globalSkills.length || localSkills.length) ? `
+  const comparisonHtml = isProject && !q && (globalSkills.length || localSkills.length) ? `
     <div class="section" style="margin-bottom:16px">
       <div class="section-title">Skill Comparison</div>
       <div class="skill-comparison">
@@ -1820,9 +1836,15 @@ function renderSkills() {
           const inLocal  = localNames.has(name);
           const scope = inGlobal && inLocal ? 'both' : inGlobal ? 'global' : 'local';
           const label = scope === 'both' ? 'Both' : scope === 'global' ? 'Global' : 'Project';
+          const safeName = name.replace(/[^a-z0-9_-]/gi, '_');
+          const jumpLinks = [
+            inLocal  ? `<button class="skill-jump-btn" onclick="document.getElementById('card-lskill_${safeName}')?.scrollIntoView({behavior:'smooth',block:'center'})" title="Jump to project card">↓ Project</button>` : '',
+            inGlobal ? `<button class="skill-jump-btn" onclick="document.getElementById('card-gskill_${safeName}')?.scrollIntoView({behavior:'smooth',block:'center'})" title="Jump to global card">↓ Global</button>` : '',
+          ].filter(Boolean).join('');
           return `<div class="skill-comparison-row">
             <span class="skill-scope-badge ${scope}">${label}</span>
-            <span style="color:var(--text-primary)">${escapeHtml(name)}</span>
+            <span style="color:var(--text-primary);flex:1">${escapeHtml(name)}</span>
+            <span class="skill-jump-group">${jumpLinks}</span>
           </div>`;
         }).join('')}
       </div>
@@ -1848,9 +1870,9 @@ function renderSkills() {
     <div class="tab-header">
       <h2>Skills <span class="badge">${totalCount}</span></h2>
       <div style="display:flex;gap:6px;align-items:center">
-        <input class="search-input" placeholder="Filter skills…"
+        <input id="skill-filter-input" class="search-input" placeholder="Filter skills…"
                value="${escapeAttr(State.skillFilter)}"
-               oninput="State.skillFilter=this.value;renderTabContent()">
+               oninput="filterDebounce('skillFilter',this.value,'skill-filter-input')">
         <button class="btn-icon${sm ? ' active' : ''}" onclick="toggleShareMode()" title="${sm ? 'Cancel share' : 'Share skills'}">⇥ Share</button>
         <button class="btn-icon" onclick="openImportModal('skill')" title="Import">↑ Import</button>
         <button class="btn-icon" onclick="openBundleModal()" title="Export Bundle">↓ Export</button>
@@ -2620,12 +2642,17 @@ function renderEditor() {
   const treeData = State.editorFileTree;
   const filename = State.editorPath ? State.editorPath.split('/').pop() : null;
   const dirtyMark = State.editorDirty ? '<span class="editor-dirty" title="Unsaved changes"> ●</span>' : '';
+  const isMd = State.editorPath?.endsWith('.md');
+  const previewBtn = isMd
+    ? `<button id="md-preview-btn" class="btn-secondary${State.editorPreviewMode ? ' active' : ''}" onclick="toggleEditorPreview()">${State.editorPreviewMode ? 'Raw' : 'Preview'}</button>`
+    : '';
 
   const toolbar = State.editorPath ? `
     <div class="editor-toolbar">
       <span class="editor-filename">${escapeHtml(filename)}${dirtyMark}</span>
       <span class="editor-lang-badge">${escapeHtml(getLangForMonaco(State.editorPath))}</span>
       <div style="margin-left:auto;display:flex;gap:6px">
+        ${previewBtn}
         <button class="btn-secondary" onclick="saveEditorFile()" title="Save (⌘S)">Save</button>
       </div>
     </div>` : `
@@ -2641,11 +2668,15 @@ function renderEditor() {
 
   const tree = `<div class="file-tree" id="editor-file-tree">${treeHtml}</div>`;
 
+  const monacoHidden = State.editorPreviewMode && isMd ? ' style="display:none"' : '';
+  const previewHidden = !(State.editorPreviewMode && isMd) ? ' style="display:none"' : '';
+
   return `<div class="editor-pane">
     ${tree}
     <div class="editor-right">
       ${toolbar}
-      <div id="monaco-container" class="monaco-container"></div>
+      <div id="monaco-container" class="monaco-container"${monacoHidden}></div>
+      <div id="md-preview" class="md-preview"${previewHidden}></div>
     </div>
   </div>`;
 }
@@ -2804,6 +2835,8 @@ async function openEditorFile(filePath) {
   }
   State.editorPath  = filePath;
   State.editorDirty = false;
+  // Reset preview when switching files; non-.md files have no preview button
+  if (!filePath.endsWith('.md')) State.editorPreviewMode = false;
 
   if (window._monacoEditor) {
     // Monaco already mounted — update in-place, no full re-render needed
@@ -2817,6 +2850,22 @@ async function openEditorFile(filePath) {
     document.querySelectorAll('.editor-tree-file').forEach(el => {
       if (el.getAttribute('onclick')?.includes(escapeAttr(filePath))) el.classList.add('active');
     });
+    // Show/hide preview toggle button based on file type
+    const toolbar = document.querySelector('.editor-toolbar > div');
+    if (toolbar) {
+      const existingBtn = document.getElementById('md-preview-btn');
+      if (filePath.endsWith('.md') && !existingBtn) {
+        const saveBtn = toolbar.querySelector('button');
+        if (saveBtn) saveBtn.insertAdjacentHTML('beforebegin', `<button id="md-preview-btn" class="btn-secondary" onclick="toggleEditorPreview()">Preview</button>`);
+      } else if (!filePath.endsWith('.md') && existingBtn) {
+        existingBtn.remove();
+        // Ensure Monaco is visible if preview was active
+        const monacoEl = document.getElementById('monaco-container');
+        const previewEl = document.getElementById('md-preview');
+        if (monacoEl) monacoEl.style.display = '';
+        if (previewEl) previewEl.style.display = 'none';
+      }
+    }
   } else {
     renderTabContent();
   }
@@ -2831,6 +2880,11 @@ async function _loadFileIntoMonaco(filePath) {
     window._monacoEditor.updateOptions({ readOnly: false });
     window._monacoEditor.setValue(data.content || '');
     State.editorDirty = false;
+    // Refresh preview pane if it's currently shown
+    if (State.editorPreviewMode && filePath?.endsWith('.md')) {
+      const previewEl = document.getElementById('md-preview');
+      if (previewEl && window.marked) previewEl.innerHTML = marked.parse(data.content || '');
+    }
   } catch (e) {
     window._monacoEditor.setValue(`// Error loading file: ${e.message}`);
   }
@@ -2856,6 +2910,30 @@ async function saveEditorFile() {
     }
   } catch (e) {
     alert('Save failed: ' + e.message);
+  }
+}
+
+function toggleEditorPreview() {
+  State.editorPreviewMode = !State.editorPreviewMode;
+  const monacoEl  = document.getElementById('monaco-container');
+  const previewEl = document.getElementById('md-preview');
+  const btn       = document.getElementById('md-preview-btn');
+  if (!monacoEl || !previewEl) return;
+
+  if (State.editorPreviewMode) {
+    const content = window._monacoEditor?.getValue() || '';
+    previewEl.innerHTML = window.marked
+      ? marked.parse(content)
+      : `<pre>${escapeHtml(content)}</pre>`;
+    monacoEl.style.display = 'none';
+    previewEl.style.display = '';
+    if (btn) { btn.textContent = 'Raw'; btn.classList.add('active'); }
+  } else {
+    monacoEl.style.display = '';
+    previewEl.style.display = 'none';
+    if (btn) { btn.textContent = 'Preview'; btn.classList.remove('active'); }
+    // Monaco needs a layout pass after being hidden
+    setTimeout(() => window._monacoEditor?.layout(), 50);
   }
 }
 
@@ -3809,9 +3887,9 @@ function renderSessionsList() {
           <button class="session-toggle-btn" onclick="State.historyMode=true;State.costReportMode=false;State.historyEntries=null;renderTabContent()">Command History</button>
           <button class="session-toggle-btn" onclick="State.historyMode=false;State.costReportMode=true;State.costReport=null;renderTabContent()">Cost Report</button>
         </div>
-        <input class="search-input" placeholder="Filter sessions…"
+        <input id="sessions-filter-input" class="search-input" placeholder="Filter sessions…"
                value="${escapeAttr(State.sessionsFilter)}"
-               oninput="State.sessionsFilter=this.value;renderTabContent()">
+               oninput="filterDebounce('sessionsFilter',this.value,'sessions-filter-input')">
       </div>
     </div>
     ${!projectPath ? '<p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">Select a project from the sidebar to see its sessions.</p>' : ''}
