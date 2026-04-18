@@ -1501,3 +1501,216 @@ html[data-theme="light"] .git-branch-select option { background: #fff; color: #1
 }
 .wf-edge-dir  { color: var(--text-muted); flex-shrink: 0; }
 .wf-edge-id   { font-family: var(--font-mono, monospace); }
+
+/* ═══════════════════════════════════════════════════════════
+   Permission Settings Manager
+   ═══════════════════════════════════════════════════════════ */
+
+/* Container */
+.perm-manager {
+  position: relative;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+.perm-manager-header h2 { font-size: 16px; font-weight: 700; margin-bottom: 3px; }
+.perm-manager-desc { font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+/* Saving overlay */
+.perm-saving-overlay {
+  position: absolute; inset: 0; z-index: 50;
+  background: rgba(0,0,0,0.35);
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  border-radius: var(--radius-md); font-size: 13px; color: var(--text-primary);
+  backdrop-filter: blur(2px);
+}
+
+/* Scope tabs */
+.perm-scope-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.perm-scope-tab {
+  display: flex; align-items: center; gap: 6px;
+  background: var(--bg-elevated); border: 1px solid var(--bg-border);
+  border-radius: var(--radius-sm); color: var(--text-secondary);
+  font-size: 12px; font-weight: 500; padding: 5px 13px; cursor: pointer;
+  transition: all var(--transition);
+}
+.perm-scope-tab:hover { background: var(--bg-hover); color: var(--text-primary); }
+.perm-scope-tab.active {
+  background: rgba(0,212,170,0.1); border-color: var(--accent-teal);
+  color: var(--accent-teal);
+}
+.perm-scope-hint {
+  font-size: 10px; opacity: 0.6; font-family: var(--font-mono);
+}
+
+/* Danger banner */
+.danger-banner {
+  display: flex; align-items: flex-start; gap: 10px;
+  background: rgba(240,77,77,0.12); border: 1px solid rgba(240,77,77,0.35);
+  border-radius: var(--radius-md); padding: 10px 14px;
+  font-size: 12px; color: var(--accent-red); line-height: 1.5;
+  animation: danger-pulse 2s ease-in-out infinite;
+}
+@keyframes danger-pulse {
+  0%,100% { box-shadow: 0 0 0 0 rgba(240,77,77,0.15); }
+  50%      { box-shadow: 0 0 0 4px rgba(240,77,77,0); }
+}
+
+/* Danger mode section */
+.danger-mode-section { background: var(--bg-surface); border: 1px solid var(--bg-border); }
+
+/* Dangerous mode toggle */
+.danger-toggle-row {
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+}
+.danger-toggle-info { flex: 1; min-width: 200px; }
+.danger-toggle-label {
+  font-size: 14px; font-weight: 600; color: var(--text-primary);
+  display: flex; align-items: center; gap: 8px; margin-bottom: 3px;
+}
+.danger-toggle-desc { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+.danger-toggle-desc code {
+  font-family: var(--font-mono); font-size: 10px;
+  background: var(--bg-elevated); border: 1px solid var(--bg-border);
+  border-radius: 3px; padding: 1px 4px; color: var(--accent-teal);
+}
+.danger-on-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+  background: rgba(240,77,77,0.2); color: var(--accent-red);
+  border: 1px solid rgba(240,77,77,0.35); border-radius: 10px; padding: 1px 7px;
+}
+
+/* Toggle button */
+.danger-toggle-btn {
+  display: flex; align-items: center; gap: 9px;
+  background: none; border: none; cursor: pointer; padding: 0;
+  flex-shrink: 0;
+}
+.danger-toggle-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.toggle-track {
+  position: relative; width: 48px; height: 26px;
+  background: var(--bg-elevated); border: 2px solid var(--bg-border);
+  border-radius: 13px; transition: background 250ms ease, border-color 250ms ease;
+}
+.toggle-thumb {
+  position: absolute; top: 3px; left: 3px;
+  width: 16px; height: 16px; border-radius: 50%;
+  background: var(--text-muted);
+  transition: transform 250ms cubic-bezier(.34,1.4,.64,1), background 250ms ease;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+}
+.danger-toggle-btn.on .toggle-track {
+  background: rgba(240,77,77,0.2); border-color: var(--accent-red);
+}
+.danger-toggle-btn.on .toggle-thumb {
+  transform: translateX(22px); background: var(--accent-red);
+  box-shadow: 0 0 8px rgba(240,77,77,0.5);
+}
+.toggle-label-text {
+  font-size: 12px; font-weight: 700; color: var(--text-muted);
+  min-width: 28px; letter-spacing: 0.04em;
+}
+.danger-toggle-btn.on .toggle-label-text { color: var(--accent-red); }
+
+/* Permission list section card */
+.perm-section {
+  background: var(--bg-surface); border: 1px solid var(--bg-border);
+  border-radius: var(--radius-md); overflow: hidden;
+  transition: var(--transition-theme);
+}
+.danger-mode-section { background: var(--bg-elevated); }
+
+.perm-section-header {
+  display: flex; align-items: center; gap: 9px;
+  padding: 10px 13px; background: var(--bg-elevated);
+  border-bottom: 1px solid var(--bg-border);
+}
+.perm-section-icon { font-size: 14px; flex-shrink: 0; }
+.perm-section-title { font-size: 12px; font-weight: 700; color: var(--text-primary); flex: 1; }
+.perm-section-count {
+  font-size: 11px; font-weight: 600; color: var(--text-muted);
+  background: var(--bg-border); border-radius: 10px; padding: 1px 7px;
+}
+.perm-section-desc { font-size: 11px; color: var(--text-muted); padding: 7px 13px 0; line-height: 1.4; }
+.perm-section-body { padding: 12px 14px; }
+.perm-add-btn {
+  background: none; border: 1px solid var(--bg-border);
+  border-radius: var(--radius-sm); color: var(--accent-teal);
+  font-size: 11px; font-weight: 600; padding: 3px 10px; cursor: pointer;
+  transition: background var(--transition), border-color var(--transition);
+  flex-shrink: 0;
+}
+.perm-add-btn:hover { background: rgba(0,212,170,0.1); border-color: var(--accent-teal); }
+
+/* Permission table */
+.perm-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.perm-table th {
+  text-align: left; padding: 6px 9px; font-size: 10px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--text-muted); background: var(--bg-elevated);
+  border-bottom: 1px solid var(--bg-border);
+}
+.perm-table td { padding: 6px 9px; border-bottom: 1px solid rgba(48,54,61,0.3); vertical-align: middle; }
+.perm-row:last-child td { border-bottom: none; }
+.perm-row:hover td { background: var(--bg-hover); }
+.perm-arg { color: var(--text-secondary); word-break: break-all; }
+.perm-raw-col { color: var(--text-muted); font-size: 10px; word-break: break-all; max-width: 200px; }
+.perm-empty { color: var(--text-muted); font-style: italic; font-size: 12px; padding: 12px 9px; }
+.perm-delete-btn {
+  background: none; border: none; color: var(--text-muted); cursor: pointer;
+  font-size: 16px; line-height: 1; padding: 2px 6px; border-radius: var(--radius-sm);
+  transition: color var(--transition), background var(--transition); opacity: 0;
+}
+.perm-row:hover .perm-delete-btn { opacity: 1; }
+.perm-delete-btn:hover { color: var(--accent-red); background: rgba(240,77,77,0.1); }
+
+/* Inline add-row */
+.perm-add-row td { border-bottom: none; padding: 8px 9px; background: rgba(0,212,170,0.03); }
+.perm-add-form {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.perm-input {
+  background: var(--bg-elevated); border: 1px solid var(--bg-border);
+  border-radius: var(--radius-sm); color: var(--text-primary);
+  font-size: 12px; padding: 5px 9px; outline: none;
+  transition: border-color var(--transition), box-shadow var(--transition);
+  font-family: var(--font-mono);
+}
+.perm-input:focus { border-color: var(--accent-teal); box-shadow: 0 0 0 3px rgba(0,212,170,0.08); }
+.perm-input::placeholder { color: var(--text-muted); font-family: var(--font-sans); }
+.perm-select { cursor: pointer; }
+.perm-add-actions { display: flex; gap: 6px; flex-shrink: 0; margin-left: auto; }
+
+/* Color helpers re-used by icons */
+.color-green  { color: var(--accent-green) !important; }
+.color-red    { color: var(--accent-red) !important; }
+.color-yellow { color: var(--accent-yellow) !important; }
+
+/* ── Stacked scope blocks (project view) ──────────────────── */
+.perm-scope-block {
+  display: flex; flex-direction: column; gap: 10px;
+}
+.perm-scope-block-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em;
+  padding: 5px 2px;
+}
+.perm-scope-block-label.local { color: var(--accent-blue); }
+.perm-scope-block-label.global { color: var(--text-muted); }
+.perm-scope-block-icon { font-size: 14px; }
+.perm-scope-block-path {
+  font-family: var(--font-mono); font-size: 10px; font-weight: 400;
+  letter-spacing: 0; text-transform: none; opacity: 0.7;
+}
+
+.perm-scope-divider {
+  display: flex; align-items: center; gap: 10px;
+  margin: 4px 0; color: var(--text-muted); font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.perm-scope-divider::before,
+.perm-scope-divider::after {
+  content: ''; flex: 1; height: 1px; background: var(--bg-border);
+}
+
+
+
