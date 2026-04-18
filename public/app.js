@@ -883,10 +883,13 @@ function renderEmpty() {
 }
 
 // ─── Shared Components ────────────────────────────────────────
-function renderMetricCard(label, value, sub, accent) {
-  return `<div class="metric-card ${accent ? 'accent' : ''}">
+function renderMetricCard(label, value, sub, accent, title) {
+  return `<div class="metric-card ${accent ? 'accent' : ''}"${title ? ` title="${escapeAttr(title)}"` : ''}>
     <span class="metric-value">${escapeHtml(String(value))}</span>
-    <span class="metric-label">${escapeHtml(label)}</span>
+    <span class="metric-label">
+      ${escapeHtml(label)}
+      ${title ? `<span class="metric-info-badge">!</span>` : ''}
+    </span>
     ${sub ? `<span class="metric-sub">${escapeHtml(sub)}</span>` : ''}
   </div>`;
 }
@@ -1426,15 +1429,20 @@ function renderGlobalOverview() {
   const hooksCount = Object.values(s.hooks || {}).reduce((a, arr) => a + arr.length, 0);
 
   const daily = stats?.dailyActivity || [];
-  const totalMsgs     = daily.reduce((acc, d) => acc + d.messageCount, 0);
+  const totalMsgs     = stats?.totalMessages || daily.reduce((acc, d) => acc + d.messageCount, 0);
   const totalSessions = stats?.totalSessions || daily.reduce((acc, d) => acc + d.sessionCount, 0);
   const totalTools    = daily.reduce((acc, d) => acc + d.toolCallCount, 0);
   const activeDays    = daily.length;
+  const hasCompaction = stats?.compactionEvents > 0;
+  const compactionTitle = hasCompaction
+    ? `${stats.compactionEvents} compaction event(s) detected. Context compaction deletes old messages from disk — actual lifetime total is higher.`
+    : null;
+  const msgLabel = 'Messages';
 
   const usageRow = stats ? `
     <div class="dashboard-section-label">Usage</div>
     <div class="metrics-row">
-      ${renderMetricCard('Messages', formatNum(totalMsgs), 'all time', true)}
+      ${renderMetricCard(msgLabel, formatNum(totalMsgs), 'on disk', true, compactionTitle)}
       ${renderMetricCard('Sessions', formatNum(totalSessions), 'all time')}
       ${renderMetricCard('Tool Calls', formatNum(totalTools), 'all time')}
       ${renderMetricCard('Active Days', activeDays, 'with activity')}
@@ -2579,12 +2587,12 @@ function renderMcpServers(mcp) {
 function renderStats() {
   const stats = State.scan.global.stats;
   if (!stats) {
-    return `<div class="empty-state" style="min-height:200px"><p>No stats-cache.json found</p></div>`;
+    return `<div class="empty-state" style="min-height:200px"><p>No session data found in ~/.claude/projects/</p></div>`;
   }
 
   const daily = stats.dailyActivity || [];
-  const totalMsgs     = daily.reduce((s, d) => s + d.messageCount, 0);
-  const totalSessions = daily.reduce((s, d) => s + d.sessionCount, 0);
+  const totalMsgs     = stats.totalMessages || daily.reduce((s, d) => s + d.messageCount, 0);
+  const totalSessions = stats.totalSessions || daily.reduce((s, d) => s + d.sessionCount, 0);
   const totalTools    = daily.reduce((s, d) => s + d.toolCallCount, 0);
   const activeDays    = daily.length;
 
@@ -2642,9 +2650,15 @@ function renderStats() {
     </tr>`
   ).join('');
 
+  const statsHasCompaction = stats.compactionEvents > 0;
+  const statsMsgLabel = 'Messages';
+  const statsMsgTitle = statsHasCompaction
+    ? `${stats.compactionEvents} compaction event(s) detected. Context compaction deletes old messages from disk — actual lifetime total is higher.`
+    : null;
+
   return `<div>
     <div class="metrics-row">
-      ${renderMetricCard('Messages', formatNum(totalMsgs), 'all time', true)}
+      ${renderMetricCard(statsMsgLabel, formatNum(totalMsgs), 'on disk', true, statsMsgTitle)}
       ${renderMetricCard('Tool Calls', formatNum(totalTools), 'all time')}
       ${renderMetricCard('Sessions', formatNum(totalSessions), 'all time')}
       ${renderMetricCard('Active Days', activeDays, 'with activity')}

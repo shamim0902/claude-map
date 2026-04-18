@@ -367,11 +367,183 @@ function readWarpPlugin(dir) {
   };
 }
 
-function readStatsCache(dir) {
-  const filePath = path.join(dir, 'stats-cache.json');
-  const data = safeReadJson(filePath);
-  if (!data) return null;
-  return data;
+// ─── Live stats computation ──────────────────────────────────────────────────
+// Walks ~/.claude/projects/**/*.jsonl and aggregates usage stats. Replaces the
+// stale ~/.claude/stats-cache.json dependency (Claude Code doesn't refresh it
+// reliably — see git history). Result is keyed on (fileCount, maxMtime,
+// totalSize) so repeated scans are O(stat) unless session data changed.
+let _liveStatsCache = null;   // { key, result }
+let _liveStatsComputing = false;
+
+// Non-blocking stats accessor: returns cached result if fresh, otherwise kicks
+// off a background recompute and returns whatever's in cache (null on first run).
+// When the background compute finishes it broadcasts an SSE cache-invalidated
+// event so the frontend refetches and the UI fills in.
+function getGlobalStatsAsync() {
+  const files = _collectSessionJsonlFiles();
+  if (!files.length) return null;
+  let maxMtime = 0, totalSize = 0;
+  for (const f of files) { if (f.mtime > maxMtime) maxMtime = f.mtime; totalSize += f.size; }
+  const key = `${files.length}:${maxMtime}:${totalSize}`;
+
+  if (_liveStatsCache && _liveStatsCache.key === key) return _liveStatsCache.result;
+
+  if (!_liveStatsComputing) {
+    _liveStatsComputing = true;
+    setImmediate(() => {
+      try { computeGlobalStats(); broadcastSSE('cache-invalidated', { reason: 'stats-ready' }); }
+      finally { _liveStatsComputing = false; }
+    });
+  }
+  return _liveStatsCache ? _liveStatsCache.result : null;
+}
+
+function _collectSessionJsonlFiles() {
+  const projectsDir = path.join(CLAUDE_DIR, 'projects');
+  if (!fs.existsSync(projectsDir)) return [];
+  const out = [];
+  let top;
+  try { top = fs.readdirSync(projectsDir); } catch { return out; }
+  for (const encoded of top) {
+    const encDir = path.join(projectsDir, encoded);
+    let st;
+    try { st = fs.statSync(encDir); } catch { continue; }
+    if (!st.isDirectory()) continue;
+    let entries;
+    try { entries = fs.readdirSync(encDir); } catch { continue; }
+    for (const entry of entries) {
+      const p = path.join(encDir, entry);
+      let s;
+      try { s = fs.statSync(p); } catch { continue; }
+      // Main session files live directly under the encoded project dir.
+      // Subagent jsonl files live at <encoded>/<sessionId>/subagents/agent-*.jsonl
+      // and must be excluded so they don't double-count.
+      if (s.isFile() && entry.endsWith('.jsonl') && !entry.includes('agent')) {
+        out.push({ path: p, mtime: s.mtimeMs, size: s.size });
+      }
+    }
+  }
+  return out;
+}
+
+function computeGlobalStats() {
+  const files = _collectSessionJsonlFiles();
+  if (!files.length) return null;
+
+  let maxMtime = 0;
+  let totalSize = 0;
+  for (const f of files) {
+    if (f.mtime > maxMtime) maxMtime = f.mtime;
+    totalSize += f.size;
+  }
+  const key = `${files.length}:${maxMtime}:${totalSize}`;
+  if (_liveStatsCache && _liveStatsCache.key === key) return _liveStatsCache.result;
+
+  const dailyMap = {};       // date -> { messageCount, toolCallCount, sessionSet }
+  const modelUsage = {};     // model -> token totals
+  const hourSessions = {};   // hour -> Set<sessionId>
+  const sessionMeta = {};    // sessionId -> { firstTs, lastTs, messageCount }
+  const allSessions = new Set();
+  let firstTs = null;
+  let totalMessages = 0;
+  let compactionEvents = 0;
+
+  for (const f of files) {
+    let content;
+    try { content = fs.readFileSync(f.path, 'utf8'); } catch { continue; }
+    const lines = content.split('\n');
+    for (const line of lines) {
+      if (!line) continue;
+      let d;
+      try { d = JSON.parse(line); } catch { continue; }
+      const type = d.type;
+      if (type === 'system' && d.subtype === 'compact_boundary') { compactionEvents += 1; continue; }
+      if (type !== 'user' && type !== 'assistant') continue;
+      const ts = d.timestamp;
+      if (!ts || typeof ts !== 'string') continue;
+      const date = ts.slice(0, 10);
+      const sid = d.sessionId || 'unknown';
+
+      if (!dailyMap[date]) dailyMap[date] = { messageCount: 0, toolCallCount: 0, sessionSet: new Set() };
+      dailyMap[date].messageCount += 1;
+      dailyMap[date].sessionSet.add(sid);
+
+      allSessions.add(sid);
+      totalMessages += 1;
+      if (!firstTs || ts < firstTs) firstTs = ts;
+
+      const hour = new Date(ts).getHours();
+      if (!hourSessions[hour]) hourSessions[hour] = new Set();
+      hourSessions[hour].add(sid);
+
+      const meta = sessionMeta[sid] || (sessionMeta[sid] = { firstTs: ts, lastTs: ts, messageCount: 0 });
+      if (ts < meta.firstTs) meta.firstTs = ts;
+      if (ts > meta.lastTs)  meta.lastTs  = ts;
+      meta.messageCount += 1;
+
+      if (type === 'assistant') {
+        const blocks = d.message && d.message.content;
+        if (Array.isArray(blocks)) {
+          for (const b of blocks) {
+            if (b && b.type === 'tool_use') dailyMap[date].toolCallCount += 1;
+          }
+        }
+        const model = d.message && d.message.model;
+        const usage = d.message && d.message.usage;
+        if (model && usage && !model.startsWith('<')) {
+          const m = modelUsage[model] || (modelUsage[model] = {
+            inputTokens: 0, outputTokens: 0,
+            cacheReadInputTokens: 0, cacheCreationInputTokens: 0,
+            webSearchRequests: 0, costUSD: 0, contextWindow: 0, maxOutputTokens: 0
+          });
+          m.inputTokens              += usage.input_tokens || 0;
+          m.outputTokens             += usage.output_tokens || 0;
+          m.cacheReadInputTokens     += usage.cache_read_input_tokens || 0;
+          m.cacheCreationInputTokens += usage.cache_creation_input_tokens || 0;
+        }
+      }
+    }
+  }
+
+  const dailyActivity = Object.keys(dailyMap).sort().map(date => ({
+    date,
+    messageCount: dailyMap[date].messageCount,
+    sessionCount: dailyMap[date].sessionSet.size,
+    toolCallCount: dailyMap[date].toolCallCount
+  }));
+
+  const hourCounts = {};
+  for (const h of Object.keys(hourSessions)) hourCounts[h] = hourSessions[h].size;
+
+  let longestSession = null;
+  for (const sid of Object.keys(sessionMeta)) {
+    const meta = sessionMeta[sid];
+    const duration = new Date(meta.lastTs).getTime() - new Date(meta.firstTs).getTime();
+    if (!longestSession || meta.messageCount > longestSession.messageCount) {
+      longestSession = {
+        sessionId: sid,
+        duration: Number.isFinite(duration) ? duration : 0,
+        messageCount: meta.messageCount,
+        timestamp: meta.firstTs
+      };
+    }
+  }
+
+  const result = {
+    version: 3,
+    lastComputedDate: new Date().toISOString().slice(0, 10),
+    dailyActivity,
+    modelUsage,
+    totalSessions: allSessions.size,
+    totalMessages,
+    compactionEvents,
+    longestSession,
+    firstSessionDate: firstTs,
+    hourCounts
+  };
+
+  _liveStatsCache = { key, result };
+  return result;
 }
 
 function readProjectsDir(dir) {
@@ -494,7 +666,7 @@ async function buildScanResult(projectPath = null) {
       rules:  readRulesDir(CLAUDE_DIR),
       agents: readAgentsDir(CLAUDE_DIR),
       plugins: { installedPlugins, warpPlugin },
-      stats: readStatsCache(CLAUDE_DIR),
+      stats: getGlobalStatsAsync(),
       projects: readProjectsDir(CLAUDE_DIR),
       fileTree: buildFileTree(CLAUDE_DIR, 0, 3)
     },
@@ -527,7 +699,6 @@ const WATCH_PATHS = [
   path.join(CLAUDE_DIR, 'commands'),
   path.join(CLAUDE_DIR, 'skills'),
   path.join(CLAUDE_DIR, 'plans'),
-  path.join(CLAUDE_DIR, 'stats-cache.json'),
   path.join(CLAUDE_DIR, 'plugins', 'installed_plugins.json'),
 ];
 
@@ -1985,6 +2156,8 @@ const httpServer = app.listen(PORT, () => {
   console.log(`\n  Claude Map`);
   console.log(`  ──────────`);
   console.log(`  http://localhost:${PORT}\n`);
+  // Warm live stats in the background so the first /api/scan is instant.
+  setImmediate(() => { try { computeGlobalStats(); } catch { /* noop */ } });
 });
 
 // ─── Terminal WebSocket (node-pty) ────────────────────────────────────────────

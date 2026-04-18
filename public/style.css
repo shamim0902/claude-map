@@ -476,8 +476,9 @@ body {
 }
 .metric-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-sm); }
 .metric-value { font-size: 22px; font-weight: var(--font-bold); color: var(--text-primary); line-height: 1; letter-spacing: var(--tracking-tight); }
-.metric-label { font-size: var(--text-xs); color: var(--text-secondary); }
+.metric-label { font-size: var(--text-xs); color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
 .metric-sub   { font-size: 10px; color: var(--text-muted); }
+.metric-info-badge { display: inline-flex; align-items: center; justify-content: center; width: 13px; height: 13px; border-radius: 50%; background: var(--text-muted); color: var(--bg-primary); font-size: 9px; font-weight: var(--font-bold); cursor: help; flex-shrink: 0; }
 .metric-card.accent { border-color: rgba(0,221,181,0.2); background: rgba(0,221,181,0.03); }
 .metric-card.accent .metric-value { color: var(--accent-teal); }
 
