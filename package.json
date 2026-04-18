@@ -1,6 +1,6 @@
 {
   "name": "claude-map",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Visual dashboard for inspecting and mapping Claude Code project configurations",
   "main": "server.js",
   "bin": {
