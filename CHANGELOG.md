@@ -7,23 +7,44 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [Unreleased] — v1.2.0
+## [1.2.2] — 2026-04-18
+
+### Fixed
+- **Cost calculation accuracy** — corrected token pricing multipliers for `claude-opus-4`, `claude-sonnet-4-5`, `claude-sonnet-4-6`, and `haiku-4-5`; costs were being over-counted when cache read tokens were present.
+- **Usage stats double-counting** — total message and tool-call counts on the Dashboard were incorrectly summing both input and output token fields, leading to inflated numbers. Now counts are derived from the correct per-turn fields.
+- **Daily cost chart off-by-one** — the last day bucket in the 30-day activity chart was being excluded due to a boundary condition in the date bucketing loop (`<` vs `<=`).
+- **Model usage breakdown missing entries** — sessions using model aliases (e.g. `claude-3-5-sonnet-20241022`) were not being matched to the pricing table, showing `$0.00` cost and being omitted from the model breakdown chart; alias normalisation now maps these to canonical model keys.
+- **Cache savings calculation** — the "Cache savings" metric was computing `cacheWriteTokens × inputPrice` instead of the correct `(cacheReadTokens × inputPrice) - (cacheReadTokens × cacheReadPrice)` delta.
+
+---
+
+## [1.2.1] — 2026-04-18
 
 ### Added
+- **Permission Settings Manager** — full interactive permission editor accessible from a new top-level **Permissions** tab in the main navigation (🔐).
+  - **Dangerous Mode toggle** — animated ON/OFF switch that sets `defaultMode: bypassPermissions` in the target settings file. Shows a pulsing red warning banner when active.
+  - **Allow / Deny / Ask lists** — interactive tables for all three permission lists. Inline add-row with tool-type selector (Bash, Read, Write, Edit, WebSearch, mcp__, Custom raw) and argument field; hover any row to reveal the × delete button.
+  - **Additional Directories** — add or remove extra filesystem paths Claude Code can access beyond the project root.
+  - **Stacked project/global view** — when a project is selected the page shows **Project-local** permissions first (`.claude/settings.local.json`) followed by a "Global defaults" divider and the global section (`~/.claude/settings.json`), both fully editable on one page.
+  - **Safe file writes** — all saves use a new `POST /api/permissions` endpoint that merges only the `permissions` block into the target file, leaving hooks, model config, and other fields untouched.
+  - **Optimistic UI** — local state patches immediately on save so the UI reflects changes before the SSE refresh fires.
+- **`GET /api/permissions`** — read the raw permissions block from a settings file (supports `?scope=global|project&project=<path>`).
+- **`POST /api/permissions`** — safely merge-write a permissions block into a settings file.
+- **Extended settings parsing** — `readSettingsJson()` now parses `deny`, `ask`, and `defaultMode` fields in addition to `allow`.
+
+### Changed
 - **Sessions → Run in Terminal** — new `▶ Run` button next to the Copy button on every session card. Clicking it navigates to the Editor tab, opens a terminal (spawning one automatically if none exists), pastes `claude --resume <id>`, and executes it immediately.
 - **Git tab** — full Git management panel per project: branch switcher, staged/unstaged file list, inline diff viewer, commit form, pull/push, branch checkout, and worktree management.
 - **Monaco Editor tab** — file tree browser with Monaco Editor (v0.52) for editing any project file in-browser, with syntax highlighting, resizable terminal tray, and `Ctrl+\`` / `Cmd+\`` toggle shortcut.
-- **Cost report on Sessions tab** — token usage grouped by day and model with client-side pricing engine (`MODEL_PRICING`, `calculateCost`, `formatCost`).
+- **Cost report on Sessions tab** — token usage grouped by day and model with client-side pricing engine.
 - **Import / Export for commands and skills** — per-card export to `.md`, bulk ZIP export, and bundle import modal.
-- **PWA support** — Web App Manifest and service worker scaffolding so the dashboard can be installed as a progressive web app.
+- **PWA support** — Web App Manifest and service worker scaffolding.
 
 ### Fixed
-- **Markdown not rendering in card bodies** — `marked@9` ships ES-modules only and does not set `window.marked` when loaded via jsDelivr script tag. Downgraded CDN reference to `marked@4.3.0` (proper UMD build) and added a built-in `renderMarkdown()` fallback so cards render even if the CDN is unreachable.
-- **CLAUDE.md not rendering in map detail panel** — `global-claude-md` and `local-claude-md` node detail views were calling `marked.parse()` directly; updated to use `renderMarkdown()`.
-- **Project CLAUDE.md expand toggle reading wrong source** — `toggleClaudeMdFull()` always read `State.scan.global.claudeMd.raw`; now reads from the correct source based on `State.mode`.
-
-### Changed
-- UI design refresh — updated card styles, badges, spacing, and color palette across all tabs.
+- **Bypass Mode padding** — "Dangerous Mode" toggle now renders inside a proper `perm-section-header` + `perm-section-body` card, eliminating the large empty gap that appeared between the section label and the toggle.
+- **Markdown not rendering in card bodies** — downgraded CDN reference to `marked@4.3.0` (proper UMD build) and added a built-in `renderMarkdown()` fallback.
+- **CLAUDE.md not rendering in map detail panel** — updated to use `renderMarkdown()`.
+- **Project CLAUDE.md expand toggle reading wrong source** — now reads from the correct source based on `State.mode`.
 
 ---
 

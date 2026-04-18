@@ -56,6 +56,7 @@ claude-map --version      # Show version
 ## Features
 
 - **Connection Map** — interactive 3-layer diagram showing how a project relates to global Claude settings
+- **Permission Settings Manager** — interactive editor for allow/deny/ask lists, Dangerous Mode toggle, and additional directories. Project-local permissions shown first, global defaults below — both editable on one page
 - **Git Tab** — GitHub Desktop-style interface: file changes, staging, diffs, commit, pull/push, branch switching, PR links, and git worktree management
 - **Rules** — view and share path-scoped rules from `.claude/rules/` across projects
 - **Hooks** — full view of all configured hooks (command/http/prompt/agent types) from global and project settings, with copy-JSON sharing
@@ -135,6 +136,15 @@ Shows all hooks defined in `settings.json` (global and project), grouped by sour
 
 Shows `.claude/agents/` custom agent definitions. Same view and share/delete UX as Skills.
 
+### Permissions
+
+Click **Permissions** (🔐) in the top navigation to open the Permission Settings Manager:
+
+- **Dangerous Mode** — toggle `defaultMode: bypassPermissions` on/off. An animated red banner appears when active as a reminder that most confirmation prompts are bypassed.
+- **Allow / Deny / Ask lists** — add rules with a tool-type selector and an argument or glob pattern (e.g. `Bash(git *)`, `Read(/tmp/*)`). Hover any row to reveal the delete button.
+- **Additional Directories** — grant Claude Code access to extra filesystem paths beyond the project root.
+- **Scope** — when a project is active the page shows **Project-local** (`.claude/settings.local.json`) at the top and **Global** (`~/.claude/settings.json`) below, each independently editable. Saves preserve all other settings (hooks, model, etc.).
+
 ### Sessions
 
 Browse all past Claude Code conversations per project. Three sub-views toggled by a pill:
@@ -176,7 +186,7 @@ Monaco-powered editor with a collapsible file tree on the left. The **terminal t
 | **Plans** | Global only | Plan files from `~/.claude/plans/` |
 | **Sessions** | Both | Conversations · Command History · Cost Report |
 | **Git** | Project only | Staging, diff, commit, branch switch, pull/push, worktrees |
-| **Settings** | Both | Permissions, hooks summary, model config, `.claudeignore` |
+| **Permissions** 🔐 | Both | Dangerous Mode toggle · Allow / Deny / Ask lists · Additional Directories · project-local + global stacked view |
 | **MCP** | Both | Installed plugins, MCP servers, marketplaces |
 | **Stats** | Global only | Activity charts, model usage, tool frequency |
 | **Raw** | Both | File tree browser with syntax-highlighted viewer |
@@ -227,6 +237,8 @@ Monaco-powered editor with a collapsible file tree on the left. The **terminal t
 | `POST` | `/api/git/checkout` | Switch branch `{ project, branch }` |
 | `POST` | `/api/git/worktree/add` | Add worktree `{ project, path, branch, existing }` |
 | `DELETE` | `/api/git/worktree` | Remove worktree `{ project, path }` |
+| `GET` | `/api/permissions` | Read permissions block `?scope=global\|project&project=<path>` |
+| `POST` | `/api/permissions` | Merge-write permissions `{ scope, projectPath, permissions }` — preserves hooks, model, and other fields |
 
 ## Project Structure
 
@@ -272,7 +284,7 @@ This project uses a GitHub Actions workflow that automatically publishes to npm 
 ```bash
 npm version patch   # or minor / major
 git add -A
-git commit -m "release: v1.2.0"
+git commit -m "release: v1.2.2"
 git push
 ```
 
