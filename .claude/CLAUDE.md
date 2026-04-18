@@ -141,7 +141,9 @@ In-memory cache with 5-second TTL. Invalidated by chokidar file watchers on `~/.
 - Frontend calls `doSilentRefresh()` (not `doRefresh()`) on invalidation — preserves current tab
 
 ### File watchers (chokidar)
-Global: `settings.json`, `CLAUDE.md`, `commands/`, `skills/`, `plans/`, `stats-cache.json`, `plugins/installed_plugins.json`
+Global: `settings.json`, `CLAUDE.md`, `commands/`, `skills/`, `plans/`, `plugins/installed_plugins.json`
+
+Usage stats are computed live from `~/.claude/projects/**/*.jsonl` via `computeGlobalStats()` (server.js) — cached in-memory keyed on (fileCount, maxMtime, totalSize). The old `stats-cache.json` seed file is ignored because Claude Code doesn't refresh it reliably.
 Project: dynamically added via `watchProjectPath(projectPath)` when editor tree loads
 
 ### Git helper
