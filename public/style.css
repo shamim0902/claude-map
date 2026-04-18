@@ -247,6 +247,7 @@ body {
 .sse-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; }
 .sse-dot.connected    { background: var(--accent-green); animation: pulse 2s infinite; }
 .sse-dot.disconnected { background: var(--accent-red); }
+.sse-dot.syncing      { background: var(--accent-yellow); animation: pulse 0.6s infinite; }
 .sse-label { font-size: 10px; color: var(--text-muted); }
 @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(63,185,80,0.4); } 50% { box-shadow: 0 0 0 4px rgba(63,185,80,0); } }
 
