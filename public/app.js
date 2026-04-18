@@ -55,6 +55,21 @@ const State = {
   costReportLoading: false,
   costReportMode: false,
 
+  // Workflows
+  workflowsList:       null,
+  workflowsLoading:    false,
+  workflowDraft:       null,
+  workflowDraftName:   null,
+  workflowDraftDirty:  false,
+  workflowDesignMode:  false,  // true = canvas designer open
+  workflowDesignDef:   null,   // parsed workflow def object
+  workflowDesignName:  null,   // filename (slug + .yaml)
+  workflowRunState:    null,
+  workflowRunLog:      [],
+  ragSearchQuery:      '',
+  ragSearchResults:    [],
+  ragStatus:           null,
+
   // Editor
   editorPath: null,
   editorDirty: false,
@@ -135,17 +150,19 @@ function formatCost(n) {
 
 // ─── Tab Definitions ──────────────────────────────────────────
 const TAB_GROUPS_GLOBAL = [
-  { id: 'dashboard', label: 'Dashboard', icon: '⊞', tabs: ['overview'] },
-  { id: 'config',    label: 'Config',    icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
-  { id: 'activity',  label: 'Activity',  icon: '◷', tabs: ['sessions', 'plans'] },
-  { id: 'editor',    label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+  { id: 'dashboard',  label: 'Dashboard',   icon: '⊞', tabs: ['overview'] },
+  { id: 'config',     label: 'Config',      icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
+  { id: 'activity',   label: 'Activity',    icon: '◷', tabs: ['sessions', 'plans'] },
+  { id: 'editor',     label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+  { id: 'workflows',  label: 'Workflows',   icon: '⬡', tabs: ['workflows'] },
 ];
 
 const TAB_GROUPS_PROJECT = [
-  { id: 'dashboard', label: 'Dashboard', icon: '◈', tabs: ['map'] },
-  { id: 'config',    label: 'Config',    icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
-  { id: 'activity',  label: 'Activity',  icon: '◷', tabs: ['sessions', 'git'] },
-  { id: 'editor',    label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+  { id: 'dashboard',  label: 'Dashboard',   icon: '◈', tabs: ['map'] },
+  { id: 'config',     label: 'Config',      icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
+  { id: 'activity',   label: 'Activity',    icon: '◷', tabs: ['sessions', 'git'] },
+  { id: 'editor',     label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+  { id: 'workflows',  label: 'Workflows',   icon: '⬡', tabs: ['workflows'] },
 ];
 
 // Flat arrays derived for backward compat (URL routing, popstate, etc.)
@@ -165,9 +182,10 @@ const TAB_META = {
   raw:      { label: 'Raw',      icon: '{ }' },
   git:      { label: 'Git',      icon: '⎇' },
   editor:   { label: 'Code Editor', icon: '✎' },
-  rules:    { label: 'Rules',   icon: '⊘' },
-  hooks:    { label: 'Hooks',   icon: '⚓' },
-  agents:   { label: 'Agents',  icon: '◎' },
+  rules:     { label: 'Rules',     icon: '⊘' },
+  hooks:     { label: 'Hooks',     icon: '⚓' },
+  agents:    { label: 'Agents',    icon: '◎' },
+  workflows: { label: 'Workflows', icon: '⬡' },
 };
 
 function getCurrentTabs() {
@@ -290,6 +308,22 @@ const API = {
   gitCheckout(p, branch)               { return fetch('/api/git/checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, branch }) }).then(r=>r.json()); },
   gitWorktreeAdd(p, wtPath, br, existing){ return fetch('/api/git/worktree/add', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, path: wtPath, branch: br, existing: !!existing }) }).then(r=>r.json()); },
   gitWorktreeRemove(p, wtPath) { return fetch('/api/git/worktree', { method:'DELETE', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, path: wtPath }) }).then(r=>r.json()); },
+
+  // ── Workflows ────────────────────────────────────────────────
+  workflowList()               { return this.get('/api/workflows'); },
+  workflowGet(name)            { return this.get(`/api/workflows/${encodeURIComponent(name)}`); },
+  workflowSave(name, content)  { return fetch(`/api/workflows/${encodeURIComponent(name)}`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ content }) }).then(r=>r.json()); },
+  workflowDelete(name)         { return fetch(`/api/workflows/${encodeURIComponent(name)}`, { method:'DELETE', headers:{'Content-Type':'application/json'} }).then(r=>r.json()); },
+  workflowRun(name, inputs)    { return fetch(`/api/workflows/${encodeURIComponent(name)}/run`, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ inputs }) }).then(r=>r.json()); },
+  workflowPause(runId)         { return fetch(`/api/workflows/run/${runId}/pause`,  { method:'POST', headers:{'Content-Type':'application/json'} }).then(r=>r.json()); },
+  workflowResume(runId)        { return fetch(`/api/workflows/run/${runId}/resume`, { method:'POST', headers:{'Content-Type':'application/json'} }).then(r=>r.json()); },
+  workflowCancel(runId)        { return fetch(`/api/workflows/run/${runId}/cancel`, { method:'POST', headers:{'Content-Type':'application/json'} }).then(r=>r.json()); },
+
+  // ── RAG ──────────────────────────────────────────────────────
+  ragStatus()                  { return this.get('/api/rag/status'); },
+  ragSearch(q, k = 5)          { return this.get(`/api/rag/search?q=${encodeURIComponent(q)}&k=${k}`); },
+  ragIndex()                   { return fetch('/api/rag/index', { method:'POST', headers:{'Content-Type':'application/json'} }).then(r=>r.json()); },
+  ragCrawl(url, maxDepth, maxPages) { return fetch('/api/rag/crawl', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ url, maxDepth, maxPages }) }).then(r=>r.json()); },
 };
 
 // ─── Utils ────────────────────────────────────────────────────
@@ -796,20 +830,21 @@ function renderTabContent() {
   if (!State.scan)  { el.innerHTML = renderEmpty(); return; }
 
   const renderers = {
-    overview: renderOverview,
-    commands: renderCommands,
-    skills:   renderSkills,
-    plans:    renderPlans,
-    sessions: renderSessions,
-    git:      renderGit,
-    settings: renderSettings,
-    mcp:      renderMCP,
-    stats:    renderStats,
-    raw:      renderRaw,
-    editor:   renderEditor,
-    rules:    renderRules,
-    hooks:    renderHooks,
-    agents:   renderAgents,
+    overview:  renderOverview,
+    commands:  renderCommands,
+    skills:    renderSkills,
+    plans:     renderPlans,
+    sessions:  renderSessions,
+    git:       renderGit,
+    settings:  renderSettings,
+    mcp:       renderMCP,
+    stats:     renderStats,
+    raw:       renderRaw,
+    editor:    renderEditor,
+    rules:     renderRules,
+    hooks:     renderHooks,
+    agents:    renderAgents,
+    workflows: renderWorkflows,
   };
 
   el.innerHTML = (renderers[State.currentTab] || renderEmpty)();
@@ -827,6 +862,18 @@ function renderTabContent() {
   }
   if (State.currentTab === 'editor') {
     setTimeout(() => initMonaco(), 0);
+  }
+  if (State.currentTab === 'workflows' && State.workflowDesignMode && State.workflowDesignDef) {
+    requestAnimationFrame(() => {
+      const svgEl = document.getElementById('wf-svg');
+      if (svgEl && typeof WFCanvas !== 'undefined') {
+        WFCanvas.init(svgEl, State.workflowDesignDef, (yaml, def) => {
+          API.workflowSave(State.workflowDesignName, yaml).then(() => {
+            State.workflowsList = null; // refresh list on next visit
+          });
+        });
+      }
+    });
   }
   attachCopyButtons();
 }
@@ -3852,6 +3899,316 @@ async function onTreeFileClick(filePath) {
   requestAnimationFrame(() => attachCopyButtons());
 }
 
+// ─── Workflows Tab ────────────────────────────────────────────────────────────
+
+function renderWorkflows() {
+  // ── Design mode: full-screen canvas ──
+  if (State.workflowDesignMode && State.workflowDesignDef) {
+    return renderWorkflowDesigner();
+  }
+
+  if (!State.workflowsList && !State.workflowsLoading) loadWorkflowsList();
+
+  if (State.workflowsLoading) {
+    return `<div class="tab-header"><h2>Workflows</h2></div>
+      <div class="loading-state"><div class="spinner"></div><p>Loading…</p></div>`;
+  }
+
+  const list    = State.workflowsList || [];
+  const runState = State.workflowRunState;
+  const runLog   = State.workflowRunLog || [];
+
+  // ── active run log panel ──
+  const runPanel = runState ? `
+    <div class="wf-run-panel section">
+      <div class="section-row">
+        <div class="section-title">Run: <strong>${escapeHtml(runState.workflowName || '')}</strong>
+          <span class="wf-run-status wf-status-${runState.status}">${runState.status}</span>
+        </div>
+        <div style="display:flex;gap:6px">
+          ${runState.status === 'running' ? `
+            <button class="btn-secondary" onclick="wfPause()">⏸ Pause</button>
+            <button class="btn-secondary" onclick="wfCancel()">✕ Cancel</button>` : ''}
+          <button class="btn-ghost" onclick="State.workflowRunState=null;State.workflowRunLog=[];renderTabContent()">Clear</button>
+        </div>
+      </div>
+      <div class="wf-run-log" id="wf-run-log">
+        ${runLog.map(entry => `
+          <div class="wf-log-entry wf-log-${escapeAttr(entry.type)}">
+            ${entry.nodeId ? `<span class="wf-log-node">[${escapeHtml(entry.nodeId)}]</span>` : ''}
+            <span class="wf-log-text">${escapeHtml(entry.text.slice(0, 500))}</span>
+          </div>`).join('')}
+      </div>
+    </div>` : '';
+
+  // ── workflow cards ──
+  const cards = list.length ? list.map(wf => `
+    <div class="wf-card">
+      <div class="wf-card-body">
+        <div class="wf-card-name">${escapeHtml(wf.name)}</div>
+        ${wf.description ? `<div class="wf-card-desc">${escapeHtml(wf.description)}</div>` : ''}
+        <div class="wf-card-meta">
+          <span>${wf.nodeCount} node${wf.nodeCount !== 1 ? 's' : ''}</span>
+          ${wf.projectPath ? `<span title="${escapeAttr(wf.projectPath)}">📁 ${escapeHtml(wf.projectPath.split('/').pop())}</span>` : ''}
+        </div>
+      </div>
+      <div class="wf-card-actions">
+        <button class="btn-primary" onclick="wfRun('${escapeAttr(wf.filename)}')">▶ Run</button>
+        <button class="btn-secondary" onclick="wfDesign('${escapeAttr(wf.filename)}')">⬡ Design</button>
+        <button class="btn-ghost" onclick="wfEdit('${escapeAttr(wf.filename)}')">YAML</button>
+        <button class="btn-ghost" onclick="wfDelete('${escapeAttr(wf.filename)}')">✕</button>
+      </div>
+    </div>`).join('') : `
+    <div class="empty-state" style="min-height:140px">
+      <div class="empty-state-icon">⬡</div>
+      <h3>No workflows yet</h3>
+      <p>Create a <span class="inline-code">.yaml</span> file in <span class="inline-code">~/.claude/workflows/</span> to get started.</p>
+    </div>`;
+
+  // ── RAG panel ──
+  const ragSt  = State.ragStatus;
+  const ragResults = State.ragSearchResults || [];
+  const ragPanel = `
+    <div class="section" style="margin-top:24px">
+      <div class="section-title">Doc Search (RAG Index)</div>
+      <div class="wf-rag-row">
+        <input id="rag-search-input" class="search-input" placeholder="Search skills, commands, crawled docs…"
+               value="${escapeAttr(State.ragSearchQuery)}"
+               oninput="ragSearch(this.value)">
+        <button class="btn-secondary" onclick="ragReindex()" title="Rebuild index">↺ Reindex</button>
+        <button class="btn-secondary" onclick="openRagCrawlModal()">+ Crawl URL</button>
+      </div>
+      ${ragSt ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">${ragSt.docCount} docs indexed${ragSt.updatedAt ? ' · ' + new Date(ragSt.updatedAt).toLocaleTimeString() : ''}</div>` : ''}
+      ${ragResults.length ? `
+        <div class="wf-rag-results">
+          ${ragResults.map(r => `
+            <div class="wf-rag-result">
+              <div class="wf-rag-result-title">
+                <span class="skill-scope-badge ${r.source === 'web' ? 'global' : 'local'}">${escapeHtml(r.source)}</span>
+                ${escapeHtml(r.title)}
+              </div>
+              <div class="wf-rag-result-excerpt">${escapeHtml(r.excerpt)}</div>
+            </div>`).join('')}
+        </div>` : State.ragSearchQuery ? `<p style="font-size:12px;color:var(--text-muted);margin-top:8px">No results for "${escapeHtml(State.ragSearchQuery)}"</p>` : ''}
+    </div>`;
+
+  return `<div>
+    <div class="tab-header">
+      <h2>Workflows <span class="badge">${list.length}</span></h2>
+      <button class="btn-primary" onclick="wfNew()">+ New Workflow</button>
+    </div>
+    ${runPanel}
+    <div class="wf-list">${cards}</div>
+    ${ragPanel}
+  </div>`;
+}
+
+function renderWorkflowDesigner() {
+  const def  = State.workflowDesignDef;
+  const name = State.workflowDesignName?.replace(/\.ya?ml$/, '') || 'Workflow';
+  const NODE_TYPES = ['input', 'agent', 'skill', 'condition', 'refiner', 'output'];
+  const addBtns = NODE_TYPES.map(t =>
+    `<button class="btn-ghost wf-add-node-btn" onclick="WFCanvas.addNode('${t}')">+ ${t}</button>`
+  ).join('');
+
+  return `
+    <div class="wf-designer">
+      <div class="wf-toolbar">
+        <button class="btn-ghost" onclick="wfDesignBack()" title="Back to list">← Back</button>
+        <span class="wf-designer-name">${escapeHtml(name)}</span>
+        <div class="wf-toolbar-sep"></div>
+        ${addBtns}
+        <div class="wf-toolbar-sep"></div>
+        <button class="btn-ghost" onclick="WFCanvas.fitView()" title="Fit to view">⊞</button>
+        <button id="wf-save-btn" class="btn-primary" onclick="WFCanvas.save()" style="margin-left:8px">Save</button>
+        ${State.workflowRunState?.status === 'running' ? '' :
+          `<button class="btn-secondary" onclick="wfRun('${escapeAttr(State.workflowDesignName || '')}')" style="margin-left:4px">▶ Run</button>`}
+      </div>
+      <div class="wf-canvas-area">
+        <svg id="wf-svg" class="wf-canvas"></svg>
+        <div class="wf-props-panel" id="wf-props-panel">
+          <div class="wf-props-empty">Select a node to edit its properties.</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+async function wfDesign(filename) {
+  try {
+    const data = await API.workflowGet(filename);
+    if (!data.ok) { alert('Failed to load workflow'); return; }
+    // data.data is the gray-matter parsed YAML object
+    const def = data.data || { name: filename.replace(/\.ya?ml$/, ''), nodes: [], edges: [] };
+    if (!def.nodes) def.nodes = [];
+    if (!def.edges) def.edges = [];
+    State.workflowDesignDef  = def;
+    State.workflowDesignName = filename;
+    State.workflowDesignMode = true;
+    renderTabContent();
+  } catch (e) { alert('Error: ' + e.message); }
+}
+
+function wfDesignBack() {
+  if (typeof WFCanvas !== 'undefined' && WFCanvas.isDirty()) {
+    if (!confirm('You have unsaved changes. Discard and go back?')) return;
+    WFCanvas.destroy();
+  }
+  State.workflowDesignMode = false;
+  State.workflowDesignDef  = null;
+  State.workflowDesignName = null;
+  renderTabContent();
+}
+
+async function loadWorkflowsList() {
+  State.workflowsLoading = true;
+  renderTabContent();
+  try {
+    const data = await API.workflowList();
+    State.workflowsList = data.workflows || [];
+    // Also load RAG status
+    const rs = await API.ragStatus();
+    State.ragStatus = rs;
+  } catch { State.workflowsList = []; }
+  State.workflowsLoading = false;
+  renderTabContent();
+}
+
+async function wfRun(filename) {
+  try {
+    const data = await API.workflowRun(filename, {});
+    State.workflowRunState = {
+      runId: data.runId,
+      workflowName: filename.replace(/\.ya?ml$/, ''),
+      status: 'running',
+      nodeStates: {},
+    };
+    State.workflowRunLog = [];
+    renderTabContent();
+    // Scroll log into view
+    setTimeout(() => document.getElementById('wf-run-log')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+  } catch (e) { alert('Failed to start run: ' + e.message); }
+}
+
+async function wfPause() {
+  if (!State.workflowRunState?.runId) return;
+  await API.workflowPause(State.workflowRunState.runId);
+  State.workflowRunState.status = 'paused';
+  renderTabContent();
+}
+
+async function wfCancel() {
+  if (!State.workflowRunState?.runId) return;
+  await API.workflowCancel(State.workflowRunState.runId);
+  State.workflowRunState.status = 'cancelled';
+  renderTabContent();
+}
+
+async function wfDelete(filename) {
+  if (!confirm(`Delete workflow "${filename}"?`)) return;
+  await API.workflowDelete(filename);
+  State.workflowsList = null;
+  renderTabContent();
+}
+
+function wfNew() {
+  const name = prompt('Workflow name:');
+  if (!name) return;
+  const slug = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const filename = slug + '.yaml';
+  // Blank starter definition
+  const def = {
+    version: 1, name, description: '',
+    nodes: [
+      { id: 'start', type: 'input',  label: 'Input', position: { x: 80,  y: 120 }, config: { default: '' } },
+      { id: 'agent', type: 'agent',  label: 'Agent', position: { x: 310, y: 120 }, config: { prompt: '{{start.output}}' } },
+      { id: 'done',  type: 'output', label: 'Done',  position: { x: 540, y: 120 }, config: { message: '{{agent.output}}' } },
+    ],
+    edges: [{ from: 'start', to: 'agent' }, { from: 'agent', to: 'done' }],
+  };
+  // Save skeleton then open designer
+  const yaml = typeof jsyaml !== 'undefined' ? jsyaml.dump(def, { lineWidth: 120 }) : JSON.stringify(def);
+  API.workflowSave(filename, yaml).then(() => {
+    State.workflowDesignDef  = def;
+    State.workflowDesignName = filename;
+    State.workflowDesignMode = true;
+    State.workflowsList = null;
+    renderTabContent();
+  }).catch(e => alert('Could not create workflow: ' + e.message));
+}
+
+function wfEdit(filename) {
+  // Navigate to the editor tab with the workflow file open
+  const filePath = (window._homedir || '') + '/.claude/workflows/' + filename;
+  State.currentTab  = 'editor';
+  State.editorPath  = filePath;
+  State.editorDirty = false;
+  syncGroupFromTab('editor');
+  renderApp();
+  setTimeout(() => initMonaco(), 0);
+}
+
+function updateWorkflowRunUI() {
+  if (State.currentTab !== 'workflows') return;
+  // Patch log div directly to avoid full re-render losing scroll position
+  const logEl = document.getElementById('wf-run-log');
+  if (!logEl) { renderTabContent(); return; }
+  const runLog = State.workflowRunLog || [];
+  logEl.innerHTML = runLog.map(entry => `
+    <div class="wf-log-entry wf-log-${escapeAttr(entry.type)}">
+      ${entry.nodeId ? `<span class="wf-log-node">[${escapeHtml(entry.nodeId)}]</span>` : ''}
+      <span class="wf-log-text">${escapeHtml(entry.text.slice(0, 500))}</span>
+    </div>`).join('');
+  logEl.scrollTop = logEl.scrollHeight;
+  // Update status badge
+  const badge = document.querySelector('.wf-run-status');
+  if (badge && State.workflowRunState) {
+    badge.textContent  = State.workflowRunState.status;
+    badge.className    = `wf-run-status wf-status-${State.workflowRunState.status}`;
+  }
+}
+
+let _ragSearchTimer = null;
+function ragSearch(q) {
+  State.ragSearchQuery = q;
+  clearTimeout(_ragSearchTimer);
+  if (!q.trim()) { State.ragSearchResults = []; renderTabContent(); return; }
+  _ragSearchTimer = setTimeout(async () => {
+    try {
+      const data = await API.ragSearch(q);
+      State.ragSearchResults = data.results || [];
+    } catch { State.ragSearchResults = []; }
+    renderTabContent();
+    const el = document.getElementById('rag-search-input');
+    if (el) { el.focus(); el.setSelectionRange(q.length, q.length); }
+  }, 250);
+}
+
+async function ragReindex() {
+  try {
+    const data = await API.ragIndex();
+    State.ragStatus = { docCount: data.docCount, updatedAt: new Date().toISOString() };
+    renderTabContent();
+  } catch (e) { alert('Reindex failed: ' + e.message); }
+}
+
+function openRagCrawlModal() {
+  const url = prompt('URL to crawl (same-origin links will be followed):');
+  if (!url) return;
+  const maxDepth = parseInt(prompt('Max depth (default 1):', '1') || '1', 10);
+  const maxPages = parseInt(prompt('Max pages (default 20):', '20') || '20', 10);
+  ragCrawlConfirm(url, maxDepth, maxPages);
+}
+
+async function ragCrawlConfirm(url, maxDepth, maxPages) {
+  try {
+    const data = await API.ragCrawl(url, maxDepth, maxPages);
+    alert(`Crawled ${data.pagesCrawled} page(s) and added to index.`);
+    const rs = await API.ragStatus();
+    State.ragStatus = rs;
+    renderTabContent();
+  } catch (e) { alert('Crawl failed: ' + e.message); }
+}
+
 // ─── Sessions Tab ─────────────────────────────────────────────
 function renderSessions() {
   if (State.sessionViewMode === 'detail' && State.activeSessionId) {
@@ -4728,6 +5085,49 @@ function initSSE() {
     if (State.editorPath && State.currentTab === 'editor' && !State.editorDirty) {
       reloadEditorFile();
     }
+  });
+
+  es.addEventListener('workflow:progress', e => {
+    const data = JSON.parse(e.data);
+    if (!State.workflowRunState || State.workflowRunState.runId !== data.runId) return;
+    // Update node state
+    if (data.nodeId && State.workflowRunState.nodeStates?.[data.nodeId]) {
+      State.workflowRunState.nodeStates[data.nodeId].status = data.status || State.workflowRunState.nodeStates[data.nodeId].status;
+      if (data.iteration != null) State.workflowRunState.nodeStates[data.nodeId].iteration = data.iteration;
+    }
+    // Append to log (chunks only when there's actual output text)
+    if (data.chunk) {
+      State.workflowRunLog.push({ ts: Date.now(), nodeId: data.nodeId, type: 'chunk', text: data.chunk });
+    } else if (data.status && data.status !== 'running') {
+      State.workflowRunLog.push({ ts: Date.now(), nodeId: data.nodeId, type: data.status, text: data.output || '' });
+    }
+    // Live canvas status overlays
+    if (data.nodeId && State.workflowDesignMode && typeof WFCanvas !== 'undefined') {
+      WFCanvas.updateNodeStatus(data.nodeId, data.status);
+    }
+    updateWorkflowRunUI();
+  });
+
+  es.addEventListener('workflow:done', e => {
+    const data = JSON.parse(e.data);
+    if (!State.workflowRunState || State.workflowRunState.runId !== data.runId) return;
+    State.workflowRunState.status = data.status || 'done';
+    State.workflowRunLog.push({ ts: Date.now(), nodeId: null, type: 'done', text: 'Workflow completed.' });
+    updateWorkflowRunUI();
+  });
+
+  es.addEventListener('workflow:error', e => {
+    const data = JSON.parse(e.data);
+    if (!State.workflowRunState || State.workflowRunState.runId !== data.runId) return;
+    State.workflowRunState.status = 'error';
+    State.workflowRunLog.push({ ts: Date.now(), nodeId: data.nodeId, type: 'error', text: data.error || 'Unknown error' });
+    updateWorkflowRunUI();
+  });
+
+  es.addEventListener('rag:indexed', e => {
+    const data = JSON.parse(e.data);
+    State.ragStatus = data;
+    if (State.currentTab === 'workflows') renderTabContent();
   });
 
   es.onerror = () => {

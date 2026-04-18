@@ -594,6 +594,35 @@ body {
 .claude-md-toggle { display: inline-flex; align-items: center; gap: 5px; margin-top: 10px; padding: 4px 10px; font-size: 11px; font-weight: 600; color: var(--accent); background: var(--bg-elevated); border: 1px solid var(--bg-border); border-radius: var(--radius-sm); cursor: pointer; user-select: none; transition: background var(--transition), color var(--transition); }
 .claude-md-toggle:hover { background: var(--bg-hover); color: var(--accent-teal); }
 
+/* ── Workflows Tab ──────────────────────────────────────────────────────── */
+.wf-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 8px; }
+.wf-card { display: flex; align-items: center; gap: 12px; padding: 14px 16px; background: var(--bg-surface); border: 1px solid var(--bg-border); border-radius: var(--radius-md); transition: border-color var(--transition); }
+.wf-card:hover { border-color: var(--accent); }
+.wf-card-body { flex: 1; min-width: 0; }
+.wf-card-name { font-weight: 600; font-size: 14px; color: var(--text-primary); margin-bottom: 2px; }
+.wf-card-desc { font-size: 12px; color: var(--text-muted); margin-bottom: 4px; }
+.wf-card-meta { display: flex; gap: 10px; font-size: 11px; color: var(--text-muted); }
+.wf-card-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.wf-run-panel { background: var(--bg-surface); border: 1px solid var(--bg-border); border-radius: var(--radius-md); padding: 14px 16px; margin-bottom: 16px; }
+.wf-run-status { display: inline-block; margin-left: 8px; font-size: 10px; font-weight: 700; text-transform: uppercase; padding: 2px 7px; border-radius: 8px; letter-spacing: 0.5px; }
+.wf-status-running  { background: rgba(0,180,255,0.12); color: #0bf; }
+.wf-status-done     { background: rgba(0,212,100,0.12); color: #0d6; }
+.wf-status-error    { background: rgba(255,80,80,0.12);  color: #f55; }
+.wf-status-paused   { background: rgba(255,180,0,0.12);  color: #fa0; }
+.wf-status-cancelled{ background: var(--bg-elevated);    color: var(--text-muted); }
+.wf-run-log { max-height: 320px; overflow-y: auto; margin-top: 10px; font-family: var(--font-mono); font-size: 11px; background: var(--bg-elevated); border: 1px solid var(--bg-border); border-radius: var(--radius-sm); padding: 10px; display: flex; flex-direction: column; gap: 2px; }
+.wf-log-entry { display: flex; gap: 6px; line-height: 1.5; word-break: break-word; }
+.wf-log-node { color: var(--accent); flex-shrink: 0; }
+.wf-log-text { color: var(--text-secondary); }
+.wf-log-done  .wf-log-text { color: #0d6; }
+.wf-log-error .wf-log-text { color: #f55; }
+.wf-log-chunk .wf-log-text { color: var(--text-muted); }
+.wf-rag-row { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+.wf-rag-results { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.wf-rag-result { padding: 10px 12px; background: var(--bg-surface); border: 1px solid var(--bg-border); border-radius: var(--radius-md); }
+.wf-rag-result-title { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; color: var(--text-primary); margin-bottom: 4px; }
+.wf-rag-result-excerpt { font-size: 11px; color: var(--text-muted); line-height: 1.5; white-space: pre-wrap; }
+
 /* Copy button */
 .copy-btn { position: absolute; top: 7px; right: 7px; background: var(--bg-hover); border: 1px solid var(--bg-border); border-radius: var(--radius-sm); color: var(--text-muted); font-size: 10px; padding: 2px 7px; cursor: pointer; opacity: 0; transition: opacity var(--transition); }
 pre:hover .copy-btn { opacity: 1; }
@@ -1261,3 +1290,214 @@ html[data-theme="light"] .git-branch-select option { background: #fff; color: #1
   border-color: rgba(0,212,170,0.45);
 }
 .pwa-install-btn.visible { display: flex; }
+
+
+/* ── Workflow Canvas Designer ──────────────────────────────────────────────── */
+
+.wf-designer {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 90px);
+  min-height: 400px;
+}
+
+.wf-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.wf-designer-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-right: 4px;
+}
+
+.wf-toolbar-sep {
+  width: 1px;
+  height: 20px;
+  background: var(--border);
+  margin: 0 4px;
+}
+
+.wf-add-node-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.wf-add-node-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+#wf-save-btn.unsaved {
+  background: var(--accent-amber, #f59e0b);
+  border-color: var(--accent-amber, #f59e0b);
+  color: #000;
+}
+
+.wf-canvas-area {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.wf-canvas {
+  flex: 1;
+  display: block;
+  background: var(--bg-primary);
+  cursor: default;
+  user-select: none;
+  background-image:
+    radial-gradient(circle, rgba(128,128,180,0.12) 1px, transparent 1px);
+  background-size: 24px 24px;
+}
+
+/* SVG edges */
+.wf-edge {
+  fill: none;
+  stroke: rgba(180,180,210,0.45);
+  stroke-width: 2;
+  pointer-events: stroke;
+  cursor: context-menu;
+  transition: stroke 0.15s;
+}
+.wf-edge:hover {
+  stroke: rgba(248,113,113,0.7);
+}
+.wf-edge-preview {
+  pointer-events: none;
+  stroke: rgba(96,165,250,0.6);
+  stroke-width: 2;
+}
+
+/* Node pulse animation (running state) */
+@keyframes wf-pulse {
+  0%,100% { opacity: 1; }
+  50%      { opacity: 0.35; }
+}
+.wf-node-pulse {
+  animation: wf-pulse 1s ease-in-out infinite;
+}
+
+/* Props panel */
+.wf-props-panel {
+  width: 260px;
+  min-width: 220px;
+  border-left: 1px solid var(--border);
+  background: var(--bg-secondary);
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+
+.wf-props-empty {
+  padding: 20px 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.wf-props-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--border);
+  gap: 8px;
+}
+
+.wf-props-type {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 20px;
+}
+
+.wf-delete-btn {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.wf-delete-btn:hover { color: var(--danger, #ef4444); }
+
+.wf-props-body {
+  padding: 10px 12px;
+}
+
+.wf-prop-group {
+  margin-bottom: 10px;
+}
+
+.wf-prop-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wf-prop-input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+  font-family: var(--font-mono, monospace);
+  transition: border-color var(--transition);
+}
+.wf-prop-input:focus { border-color: var(--accent-blue, #3b82f6); }
+
+.wf-prop-textarea {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 11px;
+  padding: 5px 8px;
+  outline: none;
+  font-family: var(--font-mono, monospace);
+  resize: vertical;
+  min-height: 72px;
+  transition: border-color var(--transition);
+}
+.wf-prop-textarea:focus { border-color: var(--accent-blue, #3b82f6); }
+
+.wf-prop-section-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 12px 0 6px;
+}
+
+.wf-edge-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  margin-bottom: 3px;
+  color: var(--text-secondary);
+}
+.wf-edge-dir  { color: var(--text-muted); flex-shrink: 0; }
+.wf-edge-id   { font-family: var(--font-mono, monospace); }

@@ -9,11 +9,16 @@ const chokidar = require('chokidar');
 const { WebSocketServer } = require('ws');
 const pty      = require('node-pty');
 
+const workflowRunner = require('./workflow-runner');
+const ragEngine      = require('./rag-engine');
+
 const app       = express();
 app.use(express.json());
 const PORT      = process.env.PORT || 8888;
 const CLAUDE_DIR    = path.resolve(os.homedir(), '.claude');
 const PINNED_FILE   = path.join(CLAUDE_DIR, 'inspector-projects.json');
+const WORKFLOWS_DIR = path.join(CLAUDE_DIR, 'workflows');
+fs.mkdirSync(WORKFLOWS_DIR, { recursive: true });
 
 // ─── Cache ────────────────────────────────────────────────────────────────────
 
@@ -514,6 +519,12 @@ setInterval(() => broadcastSSE('heartbeat', { ts: Date.now() }), 30000);
 
 // ─── File watcher ─────────────────────────────────────────────────────────────
 
+// Init workflow runner and RAG engine
+workflowRunner.init(broadcastSSE);
+ragEngine.init();
+// Build RAG index in background after startup
+setTimeout(() => ragEngine.buildIndex(), 3000);
+
 const WATCH_PATHS = [
   path.join(CLAUDE_DIR, 'settings.json'),
   path.join(CLAUDE_DIR, 'CLAUDE.md'),
@@ -522,6 +533,7 @@ const WATCH_PATHS = [
   path.join(CLAUDE_DIR, 'plans'),
   path.join(CLAUDE_DIR, 'stats-cache.json'),
   path.join(CLAUDE_DIR, 'plugins', 'installed_plugins.json'),
+  WORKFLOWS_DIR,
 ];
 
 const watcher = chokidar.watch(WATCH_PATHS, {
@@ -1913,6 +1925,147 @@ app.delete('/api/git/worktree', async (req, res) => {
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
+});
+
+// ─── Workflow CRUD ────────────────────────────────────────────────────────────
+
+app.get('/api/workflows', (req, res) => {
+  try {
+    const files = fs.existsSync(WORKFLOWS_DIR)
+      ? fs.readdirSync(WORKFLOWS_DIR).filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
+      : [];
+    const list = files.map(f => {
+      try {
+        const raw  = fs.readFileSync(path.join(WORKFLOWS_DIR, f), 'utf8');
+        const parsed = matter(raw);
+        const nodes = parsed.data?.nodes || [];
+        return {
+          filename:    f,
+          name:        parsed.data?.name || f.replace(/\.ya?ml$/, ''),
+          description: parsed.data?.description || '',
+          nodeCount:   nodes.length,
+          projectPath: parsed.data?.projectPath || null,
+          updatedAt:   fs.statSync(path.join(WORKFLOWS_DIR, f)).mtime.toISOString(),
+        };
+      } catch { return null; }
+    }).filter(Boolean);
+    res.json({ ok: true, workflows: list, claudeAvailable: true });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+app.get('/api/workflows/:name', (req, res) => {
+  const filename = req.params.name.endsWith('.yaml') || req.params.name.endsWith('.yml')
+    ? req.params.name : req.params.name + '.yaml';
+  const filePath = path.join(WORKFLOWS_DIR, filename);
+  if (!filePath.startsWith(WORKFLOWS_DIR)) return res.status(400).json({ error: 'Invalid path' });
+  try {
+    const raw    = fs.readFileSync(filePath, 'utf8');
+    const parsed = matter(raw);
+    res.json({ ok: true, raw, data: parsed.data });
+  } catch { res.status(404).json({ ok: false, error: 'Not found' }); }
+});
+
+app.post('/api/workflows/:name', (req, res) => {
+  const filename = req.params.name.endsWith('.yaml') || req.params.name.endsWith('.yml')
+    ? req.params.name : req.params.name + '.yaml';
+  const filePath = path.join(WORKFLOWS_DIR, filename);
+  if (!filePath.startsWith(WORKFLOWS_DIR)) return res.status(400).json({ error: 'Invalid path' });
+  try {
+    const content = req.body?.content;
+    if (!content) return res.status(400).json({ error: 'content required' });
+    fs.writeFileSync(filePath, content, 'utf8');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.delete('/api/workflows/:name', (req, res) => {
+  const filename = req.params.name.endsWith('.yaml') || req.params.name.endsWith('.yml')
+    ? req.params.name : req.params.name + '.yaml';
+  const filePath = path.join(WORKFLOWS_DIR, filename);
+  if (!filePath.startsWith(WORKFLOWS_DIR)) return res.status(400).json({ error: 'Invalid path' });
+  try {
+    fs.unlinkSync(filePath);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+// ─── Workflow Execution ────────────────────────────────────────────────────────
+
+app.post('/api/workflows/:name/run', async (req, res) => {
+  const filename = req.params.name.endsWith('.yaml') || req.params.name.endsWith('.yml')
+    ? req.params.name : req.params.name + '.yaml';
+  const filePath = path.join(WORKFLOWS_DIR, filename);
+  if (!filePath.startsWith(WORKFLOWS_DIR)) return res.status(400).json({ error: 'Invalid path' });
+  try {
+    const raw        = fs.readFileSync(filePath, 'utf8');
+    const parsed     = matter(raw);
+    const inputValues = req.body?.inputs || {};
+    // Fire-and-forget — run ID returned immediately, progress via SSE
+    const runId = await workflowRunner.startRun(parsed.data, inputValues);
+    res.json({ ok: true, runId });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/workflows/run/:runId/pause', (req, res) => {
+  const run = workflowRunner.activeRuns.get(req.params.runId);
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+  run.pause();
+  res.json({ ok: true });
+});
+
+app.post('/api/workflows/run/:runId/resume', (req, res) => {
+  const run = workflowRunner.activeRuns.get(req.params.runId);
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+  run.resume();
+  res.json({ ok: true });
+});
+
+app.post('/api/workflows/run/:runId/cancel', (req, res) => {
+  const run = workflowRunner.activeRuns.get(req.params.runId);
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+  run.cancel();
+  res.json({ ok: true });
+});
+
+app.get('/api/workflows/run/:runId/state', (req, res) => {
+  const run = workflowRunner.activeRuns.get(req.params.runId);
+  if (!run) return res.status(404).json({ error: 'Run not found' });
+  res.json({ ok: true, state: run.state });
+});
+
+// ─── RAG ─────────────────────────────────────────────────────────────────────
+
+app.get('/api/rag/status', (req, res) => {
+  res.json({ ok: true, ...ragEngine.getStatus() });
+});
+
+app.get('/api/rag/search', (req, res) => {
+  const q = req.query.q || '';
+  const k = Math.min(parseInt(req.query.k || '5', 10), 20);
+  if (!q) return res.json({ ok: true, results: [] });
+  res.json({ ok: true, results: ragEngine.search(q, k) });
+});
+
+app.post('/api/rag/index', async (req, res) => {
+  try {
+    const docCount = ragEngine.buildIndex();
+    broadcastSSE('rag:indexed', { docCount, durationMs: 0 });
+    res.json({ ok: true, docCount });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
+});
+
+app.post('/api/rag/crawl', async (req, res) => {
+  const { url, maxDepth = 1, maxPages = 20 } = req.body || {};
+  if (!url) return res.status(400).json({ error: 'url required' });
+  try {
+    const start    = Date.now();
+    const count    = await ragEngine.crawlUrl(url, maxDepth, maxPages);
+    const duration = Date.now() - start;
+    broadcastSSE('rag:indexed', { docCount: ragEngine.getStatus().docCount, durationMs: duration });
+    res.json({ ok: true, pagesCrawled: count });
+  } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
