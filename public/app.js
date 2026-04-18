@@ -296,6 +296,50 @@ const API = {
     return fetch('/api/agents', { method: 'DELETE', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ name, scope, projectPath: projectPath || null }) }).then(r=>r.json());
   },
 
+  // ── Workflows (server: /api/workflows/*) ───────────────────
+  workflowList() {
+    return this.get('/api/workflows');
+  },
+  async workflowGet(filename) {
+    const res = await fetch(`/api/workflows/${encodeURIComponent(filename)}`);
+    return res.json();
+  },
+  workflowSave(filename, content) {
+    return fetch(`/api/workflows/${encodeURIComponent(filename)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }).then(async r => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      return j;
+    });
+  },
+  workflowDelete(filename) {
+    return fetch(`/api/workflows/${encodeURIComponent(filename)}`, { method: 'DELETE' }).then(async r => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      return j;
+    });
+  },
+  workflowRun(filename, inputs = {}) {
+    return fetch(`/api/workflows/${encodeURIComponent(filename)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ inputs }),
+    }).then(async r => {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j.ok === false) throw new Error(j.error || `HTTP ${r.status}`);
+      return j;
+    });
+  },
+  workflowPause(runId) {
+    return fetch(`/api/workflows/run/${encodeURIComponent(runId)}/pause`, { method: 'POST' }).then(r => r.json());
+  },
+  workflowCancel(runId) {
+    return fetch(`/api/workflows/run/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }).then(r => r.json());
+  },
+
   // ── Git ──────────────────────────────────────────────────────
   gitIsRepo(p)                 { return this.get(`/api/git/is-repo?project=${encodeURIComponent(p)}`); },
   gitStatus(p)                 { return this.get(`/api/git/status?project=${encodeURIComponent(p)}`); },
