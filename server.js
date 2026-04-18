@@ -104,10 +104,17 @@ function readSettingsJson(dir, filename = 'settings.json') {
   if (!data) return null;
 
   const allow = data.permissions?.allow || [];
+  const deny  = data.permissions?.deny  || [];
+  const ask   = data.permissions?.ask   || [];
   const result = {
     permissions: {
       allow,
       allowParsed: parsePermissions(allow),
+      deny,
+      denyParsed:  parsePermissions(deny),
+      ask,
+      askParsed:   parsePermissions(ask),
+      defaultMode: data.permissions?.defaultMode || null,
       additionalDirectories: data.permissions?.additionalDirectories || []
     },
     hooks: {},
@@ -670,6 +677,63 @@ app.get('/api/scan', async (req, res) => {
     res.json(data);
   } catch (err) {
     res.status(500).json({ error: err.message, code: 'SCAN_FAILED' });
+  }
+});
+
+// ─── Permissions API ──────────────────────────────────────────────────────────
+
+// Resolve the settings file path and current JSON for a given scope
+function resolveSettingsTarget(scope, projectPath) {
+  if (scope === 'global') {
+    return { filePath: path.join(CLAUDE_DIR, 'settings.json'), dir: CLAUDE_DIR };
+  }
+  if (!projectPath) throw new Error('projectPath required for project scope');
+  const claudeDir = path.join(path.resolve(projectPath), '.claude');
+  if (!fs.existsSync(claudeDir)) fs.mkdirSync(claudeDir, { recursive: true });
+  return { filePath: path.join(claudeDir, 'settings.local.json'), dir: claudeDir };
+}
+
+app.get('/api/permissions', (req, res) => {
+  try {
+    const scope = req.query.scope || 'global';
+    const projectPath = req.query.project || null;
+    const { filePath } = resolveSettingsTarget(scope, projectPath);
+    const data = safeReadJson(filePath) || {};
+    res.json({ permissions: data.permissions || {}, scope, filePath });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+app.post('/api/permissions', (req, res) => {
+  try {
+    const { scope, projectPath, permissions } = req.body || {};
+    if (!permissions || typeof permissions !== 'object') {
+      return res.status(400).json({ error: 'Missing permissions object' });
+    }
+    const { filePath } = resolveSettingsTarget(scope || 'global', projectPath || null);
+
+    // Read existing file (preserve non-permission fields like hooks, model, etc.)
+    const existing = safeReadJson(filePath) || {};
+
+    // Clean the incoming permissions — remove empty arrays
+    const cleaned = {};
+    if (permissions.defaultMode && permissions.defaultMode !== 'default') {
+      cleaned.defaultMode = permissions.defaultMode;
+    }
+    if (Array.isArray(permissions.allow) && permissions.allow.length > 0)   cleaned.allow = permissions.allow;
+    if (Array.isArray(permissions.deny)  && permissions.deny.length  > 0)   cleaned.deny  = permissions.deny;
+    if (Array.isArray(permissions.ask)   && permissions.ask.length   > 0)   cleaned.ask   = permissions.ask;
+    if (Array.isArray(permissions.additionalDirectories) && permissions.additionalDirectories.length > 0) {
+      cleaned.additionalDirectories = permissions.additionalDirectories;
+    }
+
+    const updated = { ...existing, permissions: cleaned };
+    fs.writeFileSync(filePath, JSON.stringify(updated, null, 2) + '\n', 'utf8');
+    invalidateCache();
+    res.json({ ok: true, filePath, permissions: cleaned });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 

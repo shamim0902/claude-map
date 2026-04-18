@@ -100,6 +100,11 @@ const State = {
   gitIsRepo:            null,
   gitLogExpanded:       false,
   gitWorktreesExpanded: false,
+
+  // Permissions manager
+  permScope:   'global',   // 'global' | 'project'
+  permAddMode: null,       // '<list>:<scope>' | null  e.g. 'allow:global'
+  permSaving:  false,
 };
 
 // ─── Model Pricing (per million tokens, USD) ──────────────────
@@ -135,17 +140,19 @@ function formatCost(n) {
 
 // ─── Tab Definitions ──────────────────────────────────────────
 const TAB_GROUPS_GLOBAL = [
-  { id: 'dashboard', label: 'Dashboard', icon: '⊞', tabs: ['overview'] },
-  { id: 'config',    label: 'Config',    icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
-  { id: 'activity',  label: 'Activity',  icon: '◷', tabs: ['sessions', 'plans'] },
-  { id: 'editor',    label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+  { id: 'dashboard',   label: 'Dashboard',   icon: '⊞', tabs: ['overview'] },
+  { id: 'config',      label: 'Config',       icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'mcp', 'raw'] },
+  { id: 'permissions', label: 'Permissions',  icon: '🔐', tabs: ['settings'] },
+  { id: 'activity',    label: 'Activity',     icon: '◷', tabs: ['sessions', 'plans'] },
+  { id: 'editor',      label: 'Code Editor',  icon: '✎', tabs: ['editor'] },
 ];
 
 const TAB_GROUPS_PROJECT = [
-  { id: 'dashboard', label: 'Dashboard', icon: '◈', tabs: ['map'] },
-  { id: 'config',    label: 'Config',    icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'settings', 'mcp', 'raw'] },
-  { id: 'activity',  label: 'Activity',  icon: '◷', tabs: ['sessions', 'git'] },
-  { id: 'editor',    label: 'Code Editor', icon: '✎', tabs: ['editor'] },
+  { id: 'dashboard',   label: 'Dashboard',   icon: '◈', tabs: ['map'] },
+  { id: 'config',      label: 'Config',       icon: '⚙', tabs: ['skills', 'commands', 'rules', 'hooks', 'agents', 'mcp', 'raw'] },
+  { id: 'permissions', label: 'Permissions',  icon: '🔐', tabs: ['settings'] },
+  { id: 'activity',    label: 'Activity',     icon: '◷', tabs: ['sessions', 'git'] },
+  { id: 'editor',      label: 'Code Editor',  icon: '✎', tabs: ['editor'] },
 ];
 
 // Flat arrays derived for backward compat (URL routing, popstate, etc.)
@@ -153,21 +160,21 @@ const TABS_GLOBAL  = TAB_GROUPS_GLOBAL.flatMap(g => g.tabs);
 const TABS_PROJECT = TAB_GROUPS_PROJECT.flatMap(g => g.tabs);
 
 const TAB_META = {
-  map:      { label: 'Map',     icon: '◈' },
-  overview: { label: 'Overview', icon: '⊞' },
-  sessions: { label: 'Sessions', icon: '◷' },
-  commands: { label: 'Commands', icon: '/' },
-  skills:   { label: 'Skills',   icon: '★' },
-  plans:    { label: 'Plans',    icon: '☰' },
-  settings: { label: 'Settings', icon: '⚙' },
-  mcp:      { label: 'MCP',      icon: '⚡' },
-  stats:    { label: 'Stats',    icon: '▤' },
-  raw:      { label: 'Raw',      icon: '{ }' },
-  git:      { label: 'Git',      icon: '⎇' },
-  editor:   { label: 'Code Editor', icon: '✎' },
-  rules:    { label: 'Rules',   icon: '⊘' },
-  hooks:    { label: 'Hooks',   icon: '⚓' },
-  agents:   { label: 'Agents',  icon: '◎' },
+  map:      { label: 'Map',          icon: '◈' },
+  overview: { label: 'Overview',     icon: '⊞' },
+  sessions: { label: 'Sessions',     icon: '◷' },
+  commands: { label: 'Commands',     icon: '/' },
+  skills:   { label: 'Skills',       icon: '★' },
+  plans:    { label: 'Plans',        icon: '☰' },
+  settings: { label: 'Permissions',  icon: '🔐' },
+  mcp:      { label: 'MCP',          icon: '⚡' },
+  stats:    { label: 'Stats',        icon: '▤' },
+  raw:      { label: 'Raw',          icon: '{ }' },
+  git:      { label: 'Git',          icon: '⎇' },
+  editor:   { label: 'Code Editor',  icon: '✎' },
+  rules:    { label: 'Rules',        icon: '⊘' },
+  hooks:    { label: 'Hooks',        icon: '⚓' },
+  agents:   { label: 'Agents',       icon: '◎' },
 };
 
 function getCurrentTabs() {
@@ -290,6 +297,19 @@ const API = {
   gitCheckout(p, branch)               { return fetch('/api/git/checkout', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, branch }) }).then(r=>r.json()); },
   gitWorktreeAdd(p, wtPath, br, existing){ return fetch('/api/git/worktree/add', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, path: wtPath, branch: br, existing: !!existing }) }).then(r=>r.json()); },
   gitWorktreeRemove(p, wtPath) { return fetch('/api/git/worktree', { method:'DELETE', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ project: p, path: wtPath }) }).then(r=>r.json()); },
+
+  // ── Permissions ────────────────────────────────────────────
+  getPermissions(scope, projectPath) {
+    const qs = projectPath ? `&project=${encodeURIComponent(projectPath)}` : '';
+    return this.get(`/api/permissions?scope=${scope}${qs}`);
+  },
+  savePermissions(scope, projectPath, permissions) {
+    return fetch('/api/permissions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope, projectPath: projectPath || null, permissions }),
+    }).then(r => r.json());
+  },
 };
 
 // ─── Utils ────────────────────────────────────────────────────
@@ -2134,83 +2154,334 @@ function renderPlans() {
   </div>`;
 }
 
-// ─── Settings Tab ─────────────────────────────────────────────
-function renderSettings() {
+// ─── Settings / Permissions Manager ──────────────────────────
+
+function getPermData(scope) {
   const s    = State.scan.global.settings || {};
   const proj = State.scan.project;
-  const allow = s.permissions?.allowParsed || [];
-  const f = State.permFilter;
+  if (scope === 'project') {
+    const sl = proj?.settingsLocal?.permissions || {};
+    return {
+      allow: sl.allow || [], deny: sl.deny || [], ask: sl.ask || [],
+      defaultMode: sl.defaultMode || null,
+      additionalDirectories: sl.additionalDirectories || [],
+    };
+  }
+  const gp = s.permissions || {};
+  return {
+    allow: gp.allow || [], deny: gp.deny || [], ask: gp.ask || [],
+    defaultMode: gp.defaultMode || null,
+    additionalDirectories: gp.additionalDirectories || [],
+  };
+}
 
-  const filtered = f === 'all' ? allow : allow.filter(p => p.type === f);
+function _parseRaw(raw) {
+  const m = raw.match(/^([\w]+(?:__[\w]+)*)\((.+)\)$/s);
+  if (!m) {
+    const tool = raw.trim();
+    const type = tool.startsWith('mcp__') ? 'mcp' : 'other';
+    return { raw, tool, arg: null, type };
+  }
+  const [, tool, arg] = m;
+  let type = 'other';
+  if      (tool === 'Bash')          type = 'bash';
+  else if (tool === 'Read')          type = 'read';
+  else if (tool.startsWith('mcp__')) type = 'mcp';
+  return { raw, tool, arg: arg.trim(), type };
+}
 
-  const filterBtns = ['all','bash','read','skill','mcp','other'].map(t => {
-    const cnt = t === 'all' ? allow.length : allow.filter(p => p.type === t).length;
-    return `<button class="filter-btn ${f === t ? 'active' : ''}" onclick="State.permFilter='${t}';renderTabContent()">${t} <span class="tab-badge">${cnt}</span></button>`;
-  }).join('');
+function renderPermRow(raw, listName, idx, scope) {
+  const p = _parseRaw(raw);
+  return `<tr class="perm-row">
+    <td>${typeBadge(p.type)}</td>
+    <td class="mono">${escapeHtml(p.tool)}</td>
+    <td class="mono perm-arg">${p.arg ? escapeHtml(p.arg) : '<span style="color:var(--text-muted)">—</span>'}</td>
+    <td class="mono perm-raw-col">${escapeHtml(p.raw)}</td>
+    <td><button class="perm-delete-btn" title="Remove" onclick="permRemoveEntry('${escapeAttr(listName)}','${escapeAttr(scope)}',${idx})">&times;</button></td>
+  </tr>`;
+}
 
-  const permRows = filtered.map(p =>
-    `<tr>
-      <td>${typeBadge(p.type)}</td>
-      <td class="mono">${escapeHtml(p.tool)}</td>
-      <td class="mono">${p.arg ? escapeHtml(p.arg) : '<span style="color:var(--text-muted)">—</span>'}</td>
-    </tr>`
-  ).join('');
+function renderPermListSection(title, icon, colorVar, listName, rawEntries, scope) {
+  const isAdding = State.permAddMode === listName + ':' + scope;
+  const rows = rawEntries.length
+    ? rawEntries.map((r, i) => renderPermRow(r, listName, i, scope)).join('')
+    : `<tr><td colspan="5" class="perm-empty">No ${title.toLowerCase()} rules defined</td></tr>`;
 
-  const hooksHtml = Object.entries(s.hooks || {}).map(([hookType, hooks]) =>
-    hooks.map(h => `
-      <div class="hook-card">
-        <div class="hook-card-title">${escapeHtml(hookType)}</div>
-        <div class="hook-detail">
-          ${h.matcher ? `<span class="hook-detail-key">Matcher</span><span class="hook-detail-value">${escapeHtml(h.matcher)}</span>` : ''}
-          <span class="hook-detail-key">Command</span>
-          <span class="hook-detail-value">${escapeHtml(h.command)}</span>
-          ${h.timeout ? `<span class="hook-detail-key">Timeout</span><span class="hook-detail-value">${h.timeout}ms</span>` : ''}
-          <span class="hook-detail-key">Source</span>
-          <span class="hook-detail-value">global settings.json</span>
+  const addRowHtml = isAdding ? `
+    <tr class="perm-add-row">
+      <td colspan="5">
+        <div class="perm-add-form">
+          <select id="perm-add-type-${listName}" class="perm-input perm-select">
+            <option value="Bash">Bash</option>
+            <option value="Read">Read</option>
+            <option value="Write">Write</option>
+            <option value="Edit">Edit</option>
+            <option value="WebSearch">WebSearch</option>
+            <option value="mcp__">mcp__ (custom)</option>
+            <option value="custom">Custom raw</option>
+          </select>
+          <input id="perm-add-arg-${listName}" class="perm-input" placeholder="Argument e.g. git * or /path/*" />
+          <div class="perm-add-actions">
+            <button class="btn-primary" style="padding:4px 14px;font-size:12px" onclick="permConfirmAdd('${escapeAttr(listName)}','${escapeAttr(scope)}')">Add</button>
+            <button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="permCancelAdd()">Cancel</button>
+          </div>
         </div>
-      </div>`
-    ).join('')
-  ).join('');
+      </td>
+    </tr>` : '';
 
-  const localPerms = proj?.settingsLocal?.permissions?.allowParsed || [];
-  const localHtml = proj
-    ? `<div class="section">
-        <div class="section-title">Project-local Permissions — ${escapeHtml(proj.projectName)} (${localPerms.length})</div>
-        ${localPerms.length
-          ? `<table class="data-table">
-              <thead><tr><th>Type</th><th>Tool</th><th>Argument</th></tr></thead>
-              <tbody>${localPerms.map(p => `<tr><td>${typeBadge(p.type)}</td><td class="mono">${escapeHtml(p.tool)}</td><td class="mono">${p.arg ? escapeHtml(p.arg) : '<span style="color:var(--text-muted)">—</span>'}</td></tr>`).join('')}</tbody>
-            </table>`
-          : `<p style="font-size:12px;color:var(--text-muted)">No local permissions found</p>`}
+  return `<div class="perm-section">
+    <div class="perm-section-header">
+      <span class="perm-section-icon" style="color:${colorVar}">${icon}</span>
+      <span class="perm-section-title">${title}</span>
+      <span class="perm-section-count">${rawEntries.length}</span>
+      <button class="perm-add-btn" onclick="permStartAdd('${escapeAttr(listName)}','${escapeAttr(scope)}')">+ Add Rule</button>
+    </div>
+    <table class="perm-table">
+      <thead><tr><th>Type</th><th>Tool</th><th>Arg / Pattern</th><th>Raw</th><th></th></tr></thead>
+      <tbody>${rows}${addRowHtml}</tbody>
+    </table>
+  </div>`;
+}
+
+function renderSettings() {
+  const s         = State.scan.global.settings || {};
+  const isProject = State.mode === 'project';
+  const isSaving  = State.permSaving;
+
+  const savingOverlay = isSaving
+    ? `<div class="perm-saving-overlay"><div class="spinner"></div><span>Saving…</span></div>`
+    : '';
+
+  // ─── Helper: render the full bypass + lists + dirs block for one scope ───
+  function renderScopeBlock(scope) {
+    const perm        = getPermData(scope);
+    const isDangerous = perm.defaultMode === 'bypassPermissions';
+
+    const dangerBanner = isDangerous ? `<div class="danger-banner">
+      <span>&#9888;&#65039;</span>
+      <span><strong>Dangerous Mode is ACTIVE</strong> &mdash; Claude Code skips most permission prompts.
+      Deny rules still apply. Sensitive dirs (.git/, .vscode/) still prompt.</span>
+    </div>` : '';
+
+    const dangerToggle = `<div class="danger-toggle-row">
+      <div class="danger-toggle-info">
+        <div class="danger-toggle-label">Dangerous Mode ${isDangerous ? '<span class="danger-on-badge">ACTIVE</span>' : ''}</div>
+        <div class="danger-toggle-desc">Sets <code>defaultMode: bypassPermissions</code> &mdash; skips most confirmation prompts</div>
+      </div>
+      <button class="danger-toggle-btn ${isDangerous ? 'on' : 'off'}"
+        onclick="permToggleDangerMode('${escapeAttr(scope)}')" ${isSaving ? 'disabled' : ''}
+        title="${isDangerous ? 'Disable Dangerous Mode' : 'Enable Dangerous Mode'}">
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        <span class="toggle-label-text">${isDangerous ? 'ON' : 'OFF'}</span>
+      </button>
+    </div>`;
+
+    const bypassSection = `<div class="perm-section danger-mode-section">
+      <div class="perm-section-header">
+        <span class="perm-section-icon" style="color:var(--accent-red)">&#9889;</span>
+        <span class="perm-section-title">Bypass Mode</span>
+      </div>
+      <div class="perm-section-body">
+        ${dangerToggle}
+      </div>
+    </div>`;
+
+    const addDirs     = perm.additionalDirectories;
+    const isDirAdding = State.permAddMode === 'dir:' + scope;
+    const dirRows = addDirs.length
+      ? addDirs.map((d, i) => `<tr class="perm-row">
+          <td colspan="4" class="mono" style="color:var(--text-primary)">${escapeHtml(d)}</td>
+          <td><button class="perm-delete-btn" title="Remove" onclick="permRemoveDir('${escapeAttr(scope)}',${i})">&times;</button></td>
+        </tr>`).join('')
+      : `<tr><td colspan="5" class="perm-empty">No additional directories &mdash; project root is always accessible</td></tr>`;
+    const dirAddRow = isDirAdding ? `<tr class="perm-add-row"><td colspan="5">
+      <div class="perm-add-form">
+        <input id="perm-add-dir-input" class="perm-input" style="flex:1" placeholder="/absolute/path/to/directory" />
+        <div class="perm-add-actions">
+          <button class="btn-primary" style="padding:4px 14px;font-size:12px" onclick="permConfirmAddDir('${escapeAttr(scope)}')">Add</button>
+          <button class="btn-secondary" style="padding:4px 10px;font-size:12px" onclick="permCancelAdd()">Cancel</button>
+        </div>
+      </div>
+    </td></tr>` : '';
+
+    const dirsSection = `<div class="perm-section">
+      <div class="perm-section-header">
+        <span class="perm-section-icon" style="color:var(--accent-blue)">&#128193;</span>
+        <span class="perm-section-title">Additional Directories</span>
+        <span class="perm-section-count">${addDirs.length}</span>
+        <button class="perm-add-btn" onclick="permStartAdd('dir','${escapeAttr(scope)}')">+ Add Path</button>
+      </div>
+      <p class="perm-section-desc">Extra filesystem paths Claude Code can access beyond the project root.</p>
+      <table class="perm-table">
+        <thead><tr><th colspan="4">Directory Path</th><th></th></tr></thead>
+        <tbody>${dirRows}${dirAddRow}</tbody>
+      </table>
+    </div>`;
+
+    const modelSection = (scope === 'global' && (s.model || s.effortLevel)) ? `
+      <div class="section">
+        <div class="section-title">Model &amp; Effort</div>
+        <div class="config-grid">
+          <span class="config-key">Model</span><span class="config-value">${escapeHtml(s.model || '—')}</span>
+          <span class="config-key">Effort</span><span class="config-value">${escapeHtml(s.effortLevel || '—')}</span>
+        </div>
       </div>` : '';
 
-  return `<div>
-    <div class="section">
-      <div class="section-title">Model & Effort</div>
-      <div class="config-grid">
-        <span class="config-key">Model</span><span class="config-value">${escapeHtml(s.model || '—')}</span>
-        <span class="config-key">Effort</span><span class="config-value">${escapeHtml(s.effortLevel || '—')}</span>
+    return `
+      ${dangerBanner}
+      ${bypassSection}
+      ${renderPermListSection('Allow List', '&#10003;', 'var(--accent-green)',  'allow', perm.allow, scope)}
+      ${renderPermListSection('Deny List',  '&#10007;', 'var(--accent-red)',   'deny',  perm.deny,  scope)}
+      ${renderPermListSection('Ask List',   '?',        'var(--accent-yellow)','ask',   perm.ask,   scope)}
+      ${dirsSection}
+      ${modelSection}`;
+  }
+
+  // ─── Project mode: two stacked blocks (local first, global second) ─────
+  if (isProject) {
+    return `<div class="perm-manager">
+      ${savingOverlay}
+      <div class="perm-manager-header">
+        <h2>Permission Settings</h2>
+        <p class="perm-manager-desc">Manage Claude Code tool permissions.
+          <strong>Deny</strong> always wins. Evaluation order: Deny &rarr; Ask &rarr; Allow.</p>
       </div>
+
+      <div class="perm-scope-block">
+        <div class="perm-scope-block-label local">
+          <span class="perm-scope-block-icon">&#128196;</span>
+          Project-local
+          <span class="perm-scope-block-path">.claude/settings.local.json</span>
+        </div>
+        ${renderScopeBlock('project')}
+      </div>
+
+      <div class="perm-scope-divider">
+        <span>Global defaults</span>
+      </div>
+
+      <div class="perm-scope-block">
+        <div class="perm-scope-block-label global">
+          <span class="perm-scope-block-icon">&#127760;</span>
+          Global
+          <span class="perm-scope-block-path">~/.claude/settings.json</span>
+        </div>
+        ${renderScopeBlock('global')}
+      </div>
+    </div>`;
+  }
+
+  // ─── Global-only mode ──────────────────────────────────────────────────
+  return `<div class="perm-manager">
+    ${savingOverlay}
+    <div class="perm-manager-header">
+      <h2>Permission Settings</h2>
+      <p class="perm-manager-desc">Manage Claude Code tool permissions.
+        <strong>Deny</strong> always wins. Evaluation order: Deny &rarr; Ask &rarr; Allow.</p>
     </div>
-    <div class="section">
-      <div class="section-title">Allow-list Permissions (${allow.length})</div>
-      <div class="filter-bar">${filterBtns}</div>
-      <table class="data-table">
-        <thead><tr><th>Type</th><th>Tool</th><th>Argument</th></tr></thead>
-        <tbody>${permRows}</tbody>
-      </table>
-    </div>
-    <div class="section">
-      <div class="section-title">Hooks</div>
-      ${hooksHtml || `<p style="font-size:12px;color:var(--text-muted)">No hooks configured</p>`}
-    </div>
-    ${localHtml}
-    ${proj?.claudeIgnore ? `
-  <div class="section">
-    <div class="section-title">.claudeignore</div>
-    <pre class="code-block" style="font-size:12px;max-height:200px;overflow-y:auto">${escapeHtml(proj.claudeIgnore)}</pre>
-  </div>` : ''}
+    ${renderScopeBlock('global')}
   </div>`;
+}
+
+
+// ─── Permission Manager Handlers ──────────────────────────────
+
+function permSetScope(s) {
+  State.permScope   = s;
+  State.permAddMode = null;
+  renderTabContent();
+}
+
+function permStartAdd(list, scope) {
+  State.permAddMode = list + ':' + scope;
+  renderTabContent();
+  setTimeout(() => {
+    const el = document.getElementById('perm-add-arg-' + list) ||
+               document.getElementById('perm-add-dir-input');
+    if (el) el.focus();
+  }, 60);
+}
+
+function permCancelAdd() {
+  State.permAddMode = null;
+  renderTabContent();
+}
+
+async function permToggleDangerMode(scope) {
+  const perm = getPermData(scope);
+  const newMode = perm.defaultMode === 'bypassPermissions' ? null : 'bypassPermissions';
+  await _permSave(scope, { ...perm, defaultMode: newMode });
+}
+
+async function permRemoveEntry(list, scope, idx) {
+  const perm = getPermData(scope);
+  const arr  = [...(perm[list] || [])];
+  arr.splice(idx, 1);
+  await _permSave(scope, { ...perm, [list]: arr });
+}
+
+async function permConfirmAdd(list, scope) {
+  const typeEl = document.getElementById('perm-add-type-' + list);
+  const argEl  = document.getElementById('perm-add-arg-'  + list);
+  if (!typeEl || !argEl) return;
+  const toolType = typeEl.value;
+  const argVal   = argEl.value.trim();
+  let raw;
+  if      (toolType === 'custom')              raw = argVal;
+  else if (toolType === 'WebSearch' || !argVal) raw = toolType;
+  else                                          raw = `${toolType}(${argVal})`;
+  if (!raw) return;
+  const perm = getPermData(scope);
+  const arr  = [...(perm[list] || []), raw];
+  State.permAddMode = null;
+  await _permSave(scope, { ...perm, [list]: arr });
+}
+
+async function permRemoveDir(scope, idx) {
+  const perm = getPermData(scope);
+  const dirs = [...(perm.additionalDirectories || [])];
+  dirs.splice(idx, 1);
+  await _permSave(scope, { ...perm, additionalDirectories: dirs });
+}
+
+async function permConfirmAddDir(scope) {
+  const el = document.getElementById('perm-add-dir-input');
+  if (!el) return;
+  const val = el.value.trim();
+  if (!val) return;
+  const perm = getPermData(scope);
+  const dirs = [...(perm.additionalDirectories || []), val];
+  State.permAddMode = null;
+  await _permSave(scope, { ...perm, additionalDirectories: dirs });
+}
+
+async function _permSave(scope, permBlock) {
+  State.permSaving = true;
+  renderTabContent();
+  try {
+    const projectPath = scope === 'project' ? State.projectPath : null;
+    const res = await API.savePermissions(scope, projectPath, permBlock);
+    if (res.error) throw new Error(res.error);
+    // Optimistically patch local state so UI reflects change before SSE refresh
+    const pObj = {
+      allow: permBlock.allow || [], deny: permBlock.deny || [], ask: permBlock.ask || [],
+      defaultMode: permBlock.defaultMode || null,
+      additionalDirectories: permBlock.additionalDirectories || [],
+    };
+    if (scope === 'global' && State.scan?.global?.settings) {
+      State.scan.global.settings.permissions = {
+        ...State.scan.global.settings.permissions, ...pObj,
+      };
+    } else if (scope === 'project' && State.scan?.project?.settingsLocal) {
+      if (!State.scan.project.settingsLocal.permissions)
+        State.scan.project.settingsLocal.permissions = {};
+      Object.assign(State.scan.project.settingsLocal.permissions, pObj);
+    }
+  } catch (e) {
+    alert('Save failed: ' + e.message);
+  }
+  State.permSaving = false;
+  renderTabContent();
 }
 
 // ─── MCP & Plugins Tab ────────────────────────────────────────
