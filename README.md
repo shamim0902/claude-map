@@ -1,10 +1,15 @@
 
 <img width="1512" height="982" alt="image" src="https://github.com/user-attachments/assets/6f0d9c39-fc6c-4e52-87e7-a53c2894c8cb" />
-
-
-<p align="center">
-  <img width="200" height="345" alt="logo-claude-map" src="https://github.com/user-attachments/assets/d4f4cb74-df2f-411a-9655-65a9fee8025e" />
-</p>
+<table border="0">
+  <tr>
+    <td align="center" width="200">
+      <img width="200" height="80" alt="logo-claude-map" src="https://github.com/user-attachments/assets/d4f4cb74-df2f-411a-9655-65a9fee8025e" />
+    </td>
+    <td align="center">
+      <img width="auto" height="auto" alt="ScreenRecording" src="https://github.com/user-attachments/assets/936825a3-449b-4fb3-8aa1-4fb14cf37a3d" />
+    </td>
+  </tr>
+</table>
 
 <p align="center">
   Visual dashboard for inspecting and mapping Claude Code project configurations.
