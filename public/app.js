@@ -4971,23 +4971,35 @@ function doExport() {
     : '/api/export';
 }
 
-// Silent refresh — re-fetches data without resetting current tab or navigation state
-async function doSilentRefresh() {
+// Silent refresh — re-fetches only the changed scope without resetting navigation
+async function doSilentRefresh(scope = 'all') {
+  setSyncing(true);
   try {
-    if (State.mode === 'project' && State.projectPath) {
+    const isProject = State.mode === 'project' && State.projectPath;
+
+    // If only a specific project changed and it's not our current one, just refresh statuses
+    if (scope === 'project' && !isProject) {
+      fetchAllProjectStatuses();
+      return;
+    }
+
+    if (isProject && (scope === 'all' || scope === 'project' || scope === 'global')) {
       const [analysis, scan] = await Promise.allSettled([
         API.analyze(State.projectPath),
         API.scan(State.projectPath),
       ]);
       if (analysis.status === 'fulfilled') State.analysis = analysis.value;
-      if (scan.status === 'fulfilled')     State.scan     = scan.value;
+      if (scan.status    === 'fulfilled') State.scan     = scan.value;
     } else {
+      // Global mode
       const scan = await API.scan(null);
       State.scan = scan;
     }
     renderApp();
     renderProjectList();
-  } catch { /* ignore — stale data is fine */ }
+    fetchAllProjectStatuses();
+  } catch { /* stale data is fine — next heartbeat will try again */ }
+  finally { setSyncing(false); }
 }
 
 function doRefresh() {
@@ -4998,18 +5010,53 @@ function doRefresh() {
   }
 }
 
-// ─── SSE Client ───────────────────────────────────────────────
-function initSSE() {
+function setSyncing(on) {
+  const dot   = document.querySelector('.sse-dot');
+  const label = document.querySelector('.sse-label');
+  if (!dot || !label) return;
+  if (on) {
+    dot.classList.add('syncing');
+    label.textContent = 'Syncing…';
+  } else {
+    dot.classList.remove('syncing');
+    label.textContent = State.sseConnected ? 'Live' : 'Disconnected';
+  }
+}
+
+// ─── SSE Client  (auto-reconnect + heartbeat watchdog) ────────────────────────
+let _sse            = null;
+let _sseReconnectMs = 1000;  // starts at 1s, doubles up to 30s
+let _heartbeatTimer = null;
+
+function initSSE() { _connectSSE(); }
+
+function _connectSSE() {
+  if (_sse) { try { _sse.close(); } catch {} }
+
   const es = new EventSource('/api/events');
+  _sse = es;
 
   es.addEventListener('connected', () => {
     State.sseConnected = true;
+    _sseReconnectMs = 1000;
     updateSseIndicator(true);
+    _resetHeartbeatWatchdog();
   });
 
-  es.addEventListener('cache-invalidated', () => {
+  es.addEventListener('heartbeat', () => {
+    _resetHeartbeatWatchdog();
+  });
+
+  es.addEventListener('cache-invalidated', (e) => {
+    _resetHeartbeatWatchdog();
+    let payload = {};
+    try { payload = JSON.parse(e.data || '{}'); } catch {}
+    const scope = payload.scope || 'all';
+
     clearTimeout(State.refreshTimer);
-    State.refreshTimer = setTimeout(() => doSilentRefresh(), 800);
+    State.refreshTimer = setTimeout(() => doSilentRefresh(scope), 400);
+
+    // Also reload the editor file if it's visible and clean
     if (State.editorPath && State.currentTab === 'editor' && !State.editorDirty) {
       reloadEditorFile();
     }
@@ -5018,7 +5065,25 @@ function initSSE() {
   es.onerror = () => {
     State.sseConnected = false;
     updateSseIndicator(false);
+    es.close();
+    _sse = null;
+    clearTimeout(_heartbeatTimer);
+    // Exponential backoff reconnect
+    setTimeout(() => {
+      _sseReconnectMs = Math.min(_sseReconnectMs * 2, 30000);
+      _connectSSE();
+    }, _sseReconnectMs);
   };
+}
+
+function _resetHeartbeatWatchdog() {
+  clearTimeout(_heartbeatTimer);
+  // If we haven't heard from the server in 20s the connection is dead — reconnect
+  _heartbeatTimer = setTimeout(() => {
+    State.sseConnected = false;
+    updateSseIndicator(false);
+    _connectSSE();
+  }, 20000);
 }
 
 function updateSseIndicator(connected) {
@@ -5026,7 +5091,7 @@ function updateSseIndicator(connected) {
   const label = document.querySelector('.sse-label');
   if (!dot || !label) return;
   dot.className     = `sse-dot ${connected ? 'connected' : 'disconnected'}`;
-  label.textContent = connected ? 'Live' : 'Disconnected';
+  label.textContent = connected ? 'Live' : 'Reconnecting…';
 }
 
 // ─── Directory Browser Modal ──────────────────────────────────

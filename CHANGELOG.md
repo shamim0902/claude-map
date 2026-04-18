@@ -7,6 +7,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [1.2.3] — 2026-04-18
+
+### Improved
+- **SSE auto-reconnect with exponential backoff** — the EventSource client now automatically reconnects on disconnect, starting at 1s and doubling up to 30s, instead of staying in a permanent "Disconnected" state.
+- **Heartbeat watchdog** — client-side watchdog detects stale SSE connections (no server message in 20s) and triggers a reconnect; server heartbeat interval tightened from 30s to 15s.
+- **Scoped silent refresh** — `doSilentRefresh()` now accepts a `scope` parameter (`global`, `project`, `all`) so only the relevant data is re-fetched when a file changes, reducing unnecessary API calls.
+- **Syncing indicator** — SSE status dot shows a yellow pulsing "Syncing…" state while data is being refreshed, giving visual feedback between "Live" and "Disconnected".
+- **Smarter file-change broadcasts** — server now resolves which scope (global vs project) a changed file belongs to and sends scoped `cache-invalidated` events; rapid bursts (e.g. `git checkout`) are debounced and coalesced into a single broadcast.
+
+### Changed
+- **Expanded file watchers** — server now watches `~/.claude/projects/` (session JSONL files) and `~/.claude/todos/` for live activity updates.
+- **Watcher depth** — chokidar depth increased to 5 to cover nested project session directories.
+- **SSE disconnect label** — changed from "Disconnected" to "Reconnecting…" to reflect that the client will retry automatically.
+- **Refresh debounce** — reduced from 800ms to 400ms for snappier UI updates after file changes.
+
+---
+
 ## [1.2.2] — 2026-04-18
 
 ### Fixed

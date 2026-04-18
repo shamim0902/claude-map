@@ -688,8 +688,8 @@ function broadcastSSE(event, data) {
   }
 }
 
-// Heartbeat every 30s
-setInterval(() => broadcastSSE('heartbeat', { ts: Date.now() }), 30000);
+// Heartbeat every 15s — used by client watchdog to detect stale connections
+setInterval(() => broadcastSSE('heartbeat', { ts: Date.now() }), 15000);
 
 // ─── File watcher ─────────────────────────────────────────────────────────────
 
@@ -700,12 +700,15 @@ const WATCH_PATHS = [
   path.join(CLAUDE_DIR, 'skills'),
   path.join(CLAUDE_DIR, 'plans'),
   path.join(CLAUDE_DIR, 'plugins', 'installed_plugins.json'),
+  path.join(CLAUDE_DIR, 'projects'),   // session JSONL files — live activity
+  path.join(CLAUDE_DIR, 'todos'),
 ];
 
 const watcher = chokidar.watch(WATCH_PATHS, {
   persistent: true,
   ignoreInitial: true,
-  awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 }
+  awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
+  depth: 5,
 });
 
 const _watchedProjectPaths = new Set();
@@ -717,10 +720,40 @@ function watchProjectPath(projectPath) {
   watcher.add(resolved);
 }
 
+// Resolve which scope a changed file belongs to so clients can be surgical.
+function _scopeForPath(filePath) {
+  const resolved = path.resolve(filePath);
+  // Check registered project paths first (most specific match wins)
+  let bestMatch = null;
+  for (const p of _watchedProjectPaths) {
+    if ((resolved === p || resolved.startsWith(p + path.sep)) &&
+        (!bestMatch || p.length > bestMatch.length)) {
+      bestMatch = p;
+    }
+  }
+  if (bestMatch) return { scope: 'project', projectPath: bestMatch };
+  return { scope: 'global' };
+}
+
+let _broadcastTimer = null;
+const _pendingScopes = new Set();
+
 watcher.on('all', (event, filePath) => {
   invalidateCache();
-  broadcastSSE('file-changed', { path: filePath, event });
-  broadcastSSE('cache-invalidated', {});
+  const scopeInfo = _scopeForPath(filePath);
+  _pendingScopes.add(JSON.stringify(scopeInfo));
+  // Debounce — coalesce rapid bursts (e.g. git checkout touching many files)
+  clearTimeout(_broadcastTimer);
+  _broadcastTimer = setTimeout(() => {
+    const scopes = [..._pendingScopes].map(s => JSON.parse(s));
+    _pendingScopes.clear();
+    // If multiple different scopes changed, just broadcast a generic global refresh
+    const uniqueScopes = [...new Set(scopes.map(s => s.scope))];
+    const payload = uniqueScopes.length === 1
+      ? scopes[0]
+      : { scope: 'all' };
+    broadcastSSE('cache-invalidated', { ...payload, ts: Date.now() });
+  }, 200);
 });
 
 // ─── Security helper ──────────────────────────────────────────────────────────
